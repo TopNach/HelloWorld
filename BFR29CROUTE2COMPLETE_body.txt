@@ -1,0 +1,584 @@
+CREATE OR REPLACE PROCEDURE NOLIJWEB."BFR29CROUTE2COMPLETE" (
+   myfolderid   IN       VARCHAR2,
+   userid       IN       VARCHAR2,
+   inbox        OUT      NUMBER,
+   prompt       OUT      VARCHAR2
+)
+IS
+   e_wrong_role                EXCEPTION;
+
+   bfr29c_null_check           bfr29c_temp%ROWTYPE;
+   my_pidm                     ftvfund.ftvfund_fmgr_code_pidm%TYPE;
+   errormessage                VARCHAR2 (1000);
+   my_fund_code                VARCHAR2 (10);
+   fundcode                    VARCHAR2 (10);
+   myfundtitle                 VARCHAR2 (60);
+   myemail                     VARCHAR2 (90);
+   my_admin_email              VARCHAR2 (90);
+   myemailbody                 VARCHAR2 (1000);
+   my_email_body               VARCHAR2 (1000);
+   uda_email_address           VARCHAR2 (90);
+   save_check                  NUMBER (1);
+   role_check                  NUMBER (1);
+   my_email_check              NUMBER (1);
+   my_pidm_count               NUMBER (1);
+   my_orgcode                  bfr29c_temp.orgcode%TYPE; --ORG with Title
+   myorgncode                  bfr29c_temp.orgcode%TYPE; --ORG No Title
+   my_grant_code                   bfr29c_temp.grantcode%TYPE;
+   my_admin                    bfr29c_temp.ADMIN%TYPE;
+   my_admin_pidm               spriden.spriden_pidm%TYPE;
+   my_admin_area               sprtele.sprtele_phone_area%TYPE;
+   my_admin_number             VARCHAR2 (24);
+   frrgusn_ins                 NUMBER (6);
+   frrgusn_mbe                 NUMBER (6);
+   frrgusn_space_rent_fdn      NUMBER (6);
+   frrgusn_space_rent_nonfdn   NUMBER (6);
+   frrgusn_space               NUMBER (6);
+   frrgusn_stipends            NUMBER (6);
+   frrgusn_patents             NUMBER (6);
+   frrgusn_postdoc             NUMBER (6);
+   frrgusn_risk                NUMBER (6);
+   frrgusn_foreign             NUMBER (6);
+   crlf VARCHAR2 (2) := CHR (10)
+                                   || CHR (13); --Carriage Return and line feed
+
+   v_db_name                   gubinst.gubinst_instance_name%TYPE;
+   v_prod_host 		           VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+
+   CURSOR bfr29c_cursor
+   IS
+      SELECT *
+        FROM bfr29c_temp
+       WHERE folderid = myfolderid;
+BEGIN
+
+    --Select Database name so external email can be turned off during testing
+    SELECT gubinst_instance_name
+    INTO v_db_name
+    FROM gubinst;
+
+   --Verify that user exists in BFR29C F&A Role to process--
+   SELECT COUNT (1)
+     INTO role_check
+     FROM kw_userval
+    WHERE userval_user_id = userid
+    AND userval_role_code = 35
+    AND userval_deleted IS NULL;
+
+   IF role_check != 1
+   THEN
+      raise e_wrong_role;
+      /*
+        raise_application_error
+         (-20001,
+        prompt :=  'THIS FUND IS IN F&A INBOX - YOU MUST BE AN F&A ADMIN TO ROUTE FURTHER';
+        );
+        */
+   END IF;
+
+   /*Force user to check for unsaved data before they upload to banner*/
+
+   SELECT COUNT (1)
+     INTO save_check
+     FROM nw_verifysave
+    WHERE verifysave_folder_id = myfolderid;
+    
+
+   IF save_check != 1
+   THEN
+      prompt := 'Please review the BFR Form for changes (save icon should be disabled). If there are no changes, hit route again to move data to Banner.';
+   
+     /* prompt :=
+            '--NOT ROUTED-- PLEASE REVIEW THE BFR FORM FOR CHANGES'
+         || CHR (13)
+         || '(SAVE ICON SHOULD BE DISABLED AND THERE SHOULD BE NO BLUE FIELDS IN YOUR FORM)'
+         || CHR (13)
+         || 'IF THERE ARE NO CHANGES HIT ROUTE AGAIN TO MOVE DATA TO BANNER'
+         || CHR (13)
+         || 'IF THERE ARE CHANGES HIT SAVE FIRST THEN HIT ROUTE TO MOVE DATA TO BANNER';*/
+
+      INSERT INTO nw_verifysave
+                  (verifysave_folder_id, verifysave_activity_date
+                  )
+           VALUES (myfolderid, SYSDATE
+                  );
+      --NOLIJ6
+      inbox := -1;
+      --NOLIJ6                  
+   ELSE
+      DELETE FROM nw_verifysave
+            WHERE verifysave_folder_id = myfolderid;
+
+      --Default to the same box we are in now in case of errors
+      inbox := curboxnum ('New 29C BFR', myfolderid);
+       --Validate form data entered and fail is error returned
+      --This is onld nolij consultant function.  might be able to drop this function bfr29c_validate_form
+      errormessage := bfr29c_validate_form (myfolderid);
+
+      IF errormessage <> ''
+      THEN
+         prompt := errormessage || '  Not moving folder!';
+      ELSE
+         --Folder and form validate OK
+         prompt := 'Passed validation, routing to complete';
+         --Populate Banner
+         errormessage := bfr29c_populate_banner (myfolderid);
+
+         IF errormessage = 'GOOD'
+         THEN
+            --Update all folder id to new folder id. DO NOT MODIFY WFCURRENT AS NOLIJWEB NEEDS TO FIND THAT RECORD AGAIN!
+
+            /*Get information for emails*/
+            SELECT fundcode, fundtitle--, ADMIN --Delete after 01-JUL-2010
+              INTO my_fund_code, myfundtitle--, myemail --Delete after 01-JUL-2010
+              FROM bfr29c_temp
+             WHERE folderid = myfolderid;
+
+            SELECT SUBSTR(orgcode,1,5) --Added for Sigtracking
+             INTO myorgncode
+             FROM bfr29c_temp
+            WHERE folderid = myfolderid;
+
+            --NOT SURE THIS IS NEEDED ANYMORE
+            UPDATE kw_wfdocs
+               SET wfdocs_folder_id = my_fund_code || '|PRIME|0000'
+             WHERE wfdocs_folder_id = myfolderid;
+
+            /*--send email
+            myemailbody :=
+                  'The BFR for '
+               || my_fund_code
+               || '-'
+               || myfundtitle
+               || ' has been processed.';
+
+            SELECT goremal_email_address
+              INTO myemail
+              FROM ftvfund, goremal
+             WHERE ftvfund_fmgr_code_pidm = goremal_pidm
+               AND goremal_status_ind = 'A'
+               AND goremal_preferred_ind = 'Y'
+               AND ftvfund_fund_code = SUBSTR (myfolderid, 1, 6);
+
+            p_send_email ('bfr@foundation.sdsu.edu',
+                          myemail,
+                          'BFR Completed for ' || my_fund_code,
+                          myemailbody
+                         ); */
+
+            IF SUBSTR (myfolderid, 1, 1) = 'C'
+            THEN
+               myemailbody :=
+                     'Fund '
+                  || my_fund_code
+                  || '-'
+                  || myfundtitle
+                  || ' has been established.';
+
+               SELECT orgcode, ADMIN
+                 INTO my_orgcode, my_admin
+                 FROM bfr29c_temp
+                WHERE folderid = myfolderid;
+                
+               IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+                NW_BFRMODS.get_sra_adm_addr(my_fund_code, my_admin_email); --(my_fund_code IN, my_email_address OUT)
+                ELSE
+                    my_admin_email := 'sdsurf_dm_admin@sdsu.edu'; 
+               END IF;
+                  
+               SELECT COUNT(1), spriden_pidm
+                 INTO my_pidm_count, my_admin_pidm
+                 FROM spriden
+                WHERE spriden_id = SUBSTR (my_admin, 1, 6)
+                  AND spriden_change_ind IS NULL
+                  GROUP BY 1, spriden_pidm;
+
+               IF my_pidm_count = 1
+               THEN
+                  my_admin_number := SDSUFOWN01.signature_card_tracking_pkg.get_phone_from_pidm(my_admin_pidm,'MG');
+
+               ELSIF my_pidm_count = 0
+               THEN
+                  my_admin_number := 'Error - ADM Not Found';
+                 
+               ELSE
+                  my_admin_number := 'Error - 2+ ADMs';
+               END IF;
+
+               myemailbody :=
+                     'This e-mail is to notify you that The Campanile Foundation fund entitled '
+                  || myfundtitle
+                  || ' under the direction of '
+                  || my_orgcode
+                  || ' has been assigned fund number '
+                  || my_fund_code
+                  || ' and is now available for use.  '
+                  ||crlf
+                  || my_admin
+                  || ' has been assigned as the administrator and is available at '
+                  || my_admin_number
+                  || ' or via e-mail at '
+                  || my_admin_email
+                  || ' if you have any questions.';
+               
+
+               IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host
+                  THEN myemail := 'sdsurf_dm_campanile@sdsu.edu';
+                  ELSE myemail := 'sdsurf_dm_admin@sdsu.edu';
+               END IF;
+               
+               p_send_email ('sdsurf_dm_bfr@sdsu.edu',
+                             myemail,
+                                'A new TCF Fund '
+                             || my_fund_code
+                             || ' has been established',
+                             myemailbody
+                            );
+
+            END IF;
+
+                 -- send out other emails for additional attributes
+               --select ftvfund_grnt_code into my_grant_code from nw_ftvfund_temp where nolijweb_folder_id=proposal_code;
+               --
+            /*Get data for emails*/
+            OPEN bfr29c_cursor;
+
+            FETCH bfr29c_cursor
+             INTO bfr29c_null_check;
+
+            CLOSE bfr29c_cursor;
+
+               --Use fundcode below for email sending logic.  too lazy to change code to my_fund_code
+            -- could use some cleaning up later.
+            fundcode := my_fund_code;
+            my_grant_code := bfr29c_null_check.grantcode;
+           
+            --CRMSE Notices
+
+             IF nw_bfrmods.sdat_propgrant_check (NULL,my_grant_code,'CRMSE')
+                 THEN 
+                    nw_bfr_emails.crmse(my_fund_code,my_grant_code,NULL);
+            END IF;
+-----------------------------------------------------
+
+-----------------------------------------------------
+
+            SELECT COUNT (*)
+              INTO frrgusn_postdoc
+              FROM frrgusn
+             WHERE frrgusn_sdat_code_attr = 'POSTDOC FELLOW/TRAIN'
+               AND frrgusn_grnt_code = bfr29c_null_check.grantcode;
+
+            IF (frrgusn_postdoc > 0)
+            THEN
+               my_email_body :=
+                     bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle
+                  || ' has been awarded and requires review for POSTDOC FELLOW/TRAIN.  You may view the file in Nolijweb using the Award Files role.  FUND: '
+                  || bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle;
+
+               IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host
+                  THEN uda_email_address := 'sdsurf_dm_fellows@sdsu.edu';
+                  ELSE uda_email_address := 'sdsurf_dm_admin@sdsu.edu';
+               END IF;
+
+               p_send_email
+                  ('sdsurf_dm_admin@sdsu.edu',
+                   uda_email_address,
+                      'POSTDOC FELLOW/TRAIN - Award Document has been received for '
+                   || bfr29c_null_check.fundcode,
+                   my_email_body
+                  );
+            END IF;
+
+            --
+            SELECT COUNT (*)
+              INTO frrgusn_patents
+              FROM frrgusn
+             WHERE frrgusn_sdat_code_attr = 'PATENTS/INTELLECTUAL PROPERTY'
+               AND frrgusn_grnt_code = bfr29c_null_check.grantcode;
+
+            IF (frrgusn_patents > 0)
+            THEN
+               my_email_body :=
+                     bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle
+                  || ' has been awarded and requires review for PATENTS/INTELLECTUAL PROPERTY.  You may view the file in Nolijweb using the Award Files role.  FUND:'
+                  || bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle;
+
+               IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host 
+                  THEN uda_email_address := 'sdsurf_dm_patents@sdsu.edu';
+                  ELSE uda_email_address := 'sdsurf_dm_admin@sdsu.edu';
+               END IF;
+
+               p_send_email
+                  ('sdsurf_dm_admin@sdsu.edu',
+                   uda_email_address,
+                      'PATENTS/INTELLECTUAL PROPERTY - Award Document has been received for '
+                   || bfr29c_null_check.fundcode,
+                   my_email_body
+                  );
+            END IF;
+
+            --
+            SELECT COUNT (*)
+              INTO frrgusn_stipends
+              FROM frrgusn
+             WHERE frrgusn_sdat_code_attr = 'STIPENDS'
+               AND frrgusn_grnt_code = bfr29c_null_check.grantcode;
+
+            IF (frrgusn_stipends > 0)
+            THEN
+               my_email_body :=
+                     bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle
+                  || ' has been awarded and requires review for STIPENDS.  You may view the file in Nolijweb using the Award Files role.  FUND: '
+                  || bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle;
+
+               IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host 
+                  THEN uda_email_address := 'sdsurf_dm_stipends@sdsu.edu';
+                  ELSE uda_email_address := 'sdsurf_dm_admin@sdsu.edu';
+               END IF;
+
+               p_send_email
+                       ('sdsurf_dm_admin@sdsu.edu',
+                        uda_email_address,
+                           'STIPENDS - Award Document has been received for '
+                        || bfr29c_null_check.fundcode,
+                        my_email_body
+                       );
+            END IF;
+
+            --
+            SELECT COUNT (*)
+              INTO frrgusn_ins
+              FROM frrgusn
+             WHERE frrgusn_sdat_code_attr = 'INSURANCE ISSUES'
+               AND frrgusn_grnt_code = bfr29c_null_check.grantcode;
+
+            SELECT COUNT (*)
+              INTO frrgusn_foreign
+              FROM frrgusn
+             WHERE frrgusn_sdat_code_attr = 'FOREIGN PROJECTS'
+               AND frrgusn_grnt_code = bfr29c_null_check.grantcode;
+
+            IF (frrgusn_ins > 0) OR (frrgusn_foreign > 0)
+            THEN
+               my_email_body :=
+                     bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle
+                  || ' has been awarded and requires review for INSURANCE ISSUES/FOREIGN PROJECTS.  You may view the file in Nolijweb using the Award Files role.  FUND: '
+                  || bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle;
+
+               IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host
+                  THEN uda_email_address := 'sdsurf_dm_insurance@sdsu.edu';
+                  ELSE uda_email_address := 'sdsurf_dm_admin@sdsu.edu';
+               END IF;
+
+               p_send_email
+                  ('sdsurf_dm_admin@sdsu.edu',
+                   uda_email_address,
+                      'INSURANCE ISSUES/FOREIGN PROJECTS - Award Document has been received for '
+                   || bfr29c_null_check.fundcode,
+                   my_email_body
+                  );
+            END IF;
+
+            --
+            SELECT COUNT (*)
+              INTO frrgusn_risk
+              FROM frrgusn
+             WHERE frrgusn_sdat_code_attr = 'AT RISK ACTIVITIES'
+               AND frrgusn_grnt_code = bfr29c_null_check.grantcode;
+
+            IF frrgusn_risk > 0
+            THEN
+               my_email_body :=
+                     bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle
+                  || ' has been awarded and requires review for AT RISK ACTIVITIES.  You may view the file in Nolijweb using the Award Files role.  FUND: '
+                  || bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle;
+
+               IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host 
+                  THEN uda_email_address := 'sdsurf_dm_atrisk@sdsu.edu';
+                  ELSE uda_email_address := 'sdsurf_dm_admin@sdsu.edu';
+               END IF;
+
+               p_send_email
+                  ('sdsurf_dm_admin@sdsu.edu',
+                   uda_email_address,
+                      'AT RISK ACTIVITIES - Award Document has been received for '
+                   || bfr29c_null_check.fundcode,
+                   my_email_body
+                  );
+            END IF;
+
+            --
+            SELECT COUNT (*)
+              INTO frrgusn_mbe
+              FROM frrgusn
+             WHERE frrgusn_sdat_code_attr = 'MBE/WBE'
+               AND frrgusn_grnt_code = bfr29c_null_check.grantcode;
+
+            IF frrgusn_mbe > 0
+            THEN
+               my_email_body :=
+                     bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle
+                  || ' has been awarded and requires review for MBE/WBE.  You may view the file in Nolijweb using the Award Files role.  FUND: '
+                  || bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle;
+
+               IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host
+                  THEN uda_email_address := 'sdsurf_dm_mbewme@sdsu.edu';
+                  ELSE uda_email_address := 'sdsurf_dm_admin@sdsu.edu';
+               END IF;
+
+               p_send_email
+                        ('sdsurf_dm_admin@sdsu.edu',
+                         uda_email_address,
+                            'MBE/WBE - Award Document has been received for '
+                         || bfr29c_null_check.fundcode,
+                         my_email_body
+                        );
+            END IF;
+
+ /* Facilities requested that no more Space notification emails would be sent out.  IB 
+
+            SELECT COUNT (*)
+              INTO frrgusn_space_rent_fdn
+              FROM frrgusn
+             WHERE frrgusn_sdat_code_attr = 'SPACE RENT FDN'
+               AND frrgusn_grnt_code = bfr29c_null_check.grantcode;
+
+            SELECT COUNT (*)
+              INTO frrgusn_space_rent_nonfdn
+              FROM frrgusn
+             WHERE frrgusn_sdat_code_attr = 'SPACE RENT NON FDN'
+               AND frrgusn_grnt_code = bfr29c_null_check.grantcode;
+
+            SELECT COUNT (*)
+              INTO frrgusn_space
+              FROM frrgusn
+             WHERE frrgusn_sdat_code_attr = 'SPACE'
+               AND frrgusn_grnt_code = bfr29c_null_check.grantcode;
+
+            IF    (frrgusn_space_rent_fdn > 0)
+               OR (frrgusn_space_rent_nonfdn > 0)
+               OR (frrgusn_space > 0)
+            THEN
+               my_email_body :=
+                     bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle
+                  || ' has been awarded and requires review for SPACE.  You may view the file in Nolijweb using the Award Files role.  FUND: '
+                  || bfr29c_null_check.fundcode
+                  || '-'
+                  || bfr29c_null_check.fundtitle;
+
+               IF v_db_name = 'PROD' 
+                  THEN uda_email_address := 'nw_space@foundation.sdsu.edu';
+                  ELSE uda_email_address := 'sdsurf_dm_admin@sdsu.edu';
+               END IF;
+
+               p_send_email
+                          ('sdsurf_dm_admin@sdsu.edu',
+                           uda_email_address,
+                              'Space - Award Document has been received for '
+                           || bfr29c_null_check.fundcode,
+                           my_email_body
+                          );
+            END IF;
+            
+            */
+
+            SELECT ftvfund_fmgr_code_pidm
+              INTO my_pidm
+              FROM ftvfund
+             WHERE ftvfund_fund_code = SUBSTR (myfolderid, 1, 6);
+
+            my_email_body :=
+                  'BFR has been completed for Fund'
+               || ': '
+               || my_fund_code
+               || ' '
+               || my_orgcode
+               || ' '
+               || myfundtitle
+               || ' with Grant Code: '
+               || bfr29c_null_check.grantcode;
+
+            IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+                SELECT goremal_email_address
+                INTO myemail
+                FROM goremal
+                WHERE goremal_pidm = my_pidm;
+              ELSE myemail := 'sdsurf_dm_admin@sdsu.edu';
+            END IF;
+
+            p_send_email ('sdsurf_dm_admin@sdsu.edu',
+                          myemail,
+                          'BFR Completed for ' || my_fund_code,
+                          my_email_body
+                         );
+
+
+            --File to complete
+            inbox := boxnum ('New 29C BFR', 'Complete');
+            nw_audit.audit_wf_bfr5add (myfolderid,
+                                       inbox,
+                                       '0',
+                                       userid,
+                                       'New 29C BFR/BFR29CROUTE2COMPLETE'
+                                      );
+         --Begin Auto sending of SigLetter
+         IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+ 
+            BEGIN
+              qwx.sig_auth.generate_sig_auth(my_fund_code);
+              EXCEPTION WHEN OTHERS THEN NULL;
+            END;
+            
+            ----BEGIN - REMOVE THIS SECTION ONCE PIPROFILE SIGAUTH PROCEDURE CALL REPLACES SIGNATURE CARD CALL ABOVE!           
+            --p_send_email('nolij@foundation.sdsu.edu',
+            --                'sr_admin@foundation.sdsu.edu',
+            --                'Automated SigAuth Not Sent for Fund '||my_fund_code,
+            --                'SigAuth not sent for this fund.  Please set a reminder to manually generate SigAuth for this fund.');
+            --END - REMOVE THIS SECTION ONCE PIPROFILE SIGAUTH PROCEDURE CALL REPLACES SIGNATURE CARD CALL ABOVE!        
+
+         END IF;
+        --End Auto sending of SigLetter
+
+         ELSE
+            prompt :=
+                  'An error occured in populating banner. '
+               || errormessage
+               || ' Please contact a supervisor!';
+         END IF;
+      END IF;
+   END IF;
+   
+   EXCEPTION
+    WHEN e_wrong_role THEN
+      inbox := -1;
+      prompt := 'THIS FUND IS IN F&A INBOX - YOU MUST BE AN F&A ADMIN TO ROUTE FURTHER';
+   
+END;
+/

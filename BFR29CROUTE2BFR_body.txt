@@ -1,0 +1,136 @@
+CREATE OR REPLACE PROCEDURE NOLIJWEB."BFR29CROUTE2BFR" (
+   myfolderid   IN       VARCHAR2,
+   userid       IN       VARCHAR2,
+   inbox        OUT      NUMBER,
+   prompt       OUT      VARCHAR2
+)
+IS
+   errormessage                VARCHAR2 (1000);
+   field_edit                  NUMBER;
+   null_check                  NUMBER;
+   bfr29c_null_check           bfr29c_temp%ROWTYPE;
+   my_email_address            goremal.goremal_email_address%TYPE;
+   my_email_body               VARCHAR2 (1000);
+   frrgusn_ins                 NUMBER (6);
+   frrgusn_mbe                 NUMBER (6);
+   frrgusn_space_rent_fdn      NUMBER (6);
+   frrgusn_space_rent_nonfdn   NUMBER (6);
+   frrgusn_space               NUMBER (6);
+   frrgusn_stipends            NUMBER (6);
+   frrgusn_patents             NUMBER (6);
+   frrgusn_postdoc             NUMBER (6);
+   frrgusn_risk                NUMBER (6);
+   frrgusn_foreign             NUMBER (6);
+   v_db_name                   gubinst.gubinst_instance_name%TYPE;
+   v_prod_host 		       VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+
+   CURSOR bfr29c_cursor
+   IS
+      SELECT *
+        FROM bfr29c_temp
+       WHERE folderid = myfolderid;
+BEGIN
+
+
+ --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+      
+   /*SET field_edit flag or null_check flag if user tries to route an folder with EMPTY or BFR with nulls
+   Route of BFR with nulls can occur if user hits route right after they hit save*/
+   SELECT COUNT (1)
+     INTO field_edit
+     FROM frbgrnt, bfr29c_temp
+    WHERE frbgrnt_code = grantcode AND folderid = myfolderid;
+
+   OPEN bfr29c_cursor;
+
+   FETCH bfr29c_cursor
+    INTO bfr29c_null_check;
+
+   IF bfr29c_cursor%NOTFOUND
+   THEN
+      null_check := 1;
+   END IF;
+
+   IF    --NOLIJ6
+         bfr29c_null_check.folderid IS NULL
+      OR bfr29c_null_check.grantcode IS NULL
+      OR bfr29c_null_check.fundcode IS NULL
+      OR bfr29c_null_check.fundtitle IS NULL
+      OR bfr29c_null_check.predecessorfundcode IS NULL
+      OR bfr29c_null_check.orgcode IS NULL
+      OR bfr29c_null_check.defaultorgn IS NULL
+      OR bfr29c_null_check.defaultprog IS NULL
+      OR bfr29c_null_check.ADMIN IS NULL
+      OR bfr29c_null_check.icbasis IS NULL
+      OR bfr29c_null_check.icrate IS NULL
+      OR bfr29c_null_check.iccost IS NULL
+      OR bfr29c_null_check.icdistribution IS NULL
+      OR bfr29c_null_check.fundstartday IS NULL
+      OR bfr29c_null_check.fundstartmonth IS NULL
+      OR bfr29c_null_check.fundstartyear IS NULL
+      OR bfr29c_null_check.userid IS NULL
+      OR bfr29c_null_check.admcode IS NULL
+     -- OR bfr29c_null_check.relatedgrant IS NULL
+      --OR bfr29c_null_check.revtype IS NULL
+      --NOLIJ6
+   THEN
+      null_check := 1;
+   END IF;
+
+   CLOSE bfr29c_cursor;
+
+   IF field_edit = 0 OR null_check = 1
+   THEN
+      prompt :=
+            'ERROR: '
+         || CHR (13)
+         || CHR (13)
+         || 'MISSING REQUIRED FIELDS. NEED TO ENTER DATA AND SAVE FORM BEFORE ROUTING'
+         || CHR (13)
+         || CHR (13)
+         || 'FOLDER FOR FUND '
+         || SUBSTR (myfolderid, 1, 6)
+         || ' NOT ROUTED';
+         --NOLIJ6
+         inbox:=-1;
+         --NOLIJ6
+   ELSE
+      --BFR COMPLETE OK to route
+      prompt := 'Passed validation, routing to BFR';
+      inbox := boxnum ('New 29C BFR', 'BFR');
+      errormessage := bfr29c_validate_form (myfolderid);
+
+      IF errormessage <> ''
+      THEN
+         prompt := errormessage || '  Not moving folder!';
+         inbox := curboxnum ('New 29C BFR', myfolderid);
+      ELSE
+         -- send out email to admin
+        IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host 
+        THEN my_email_address := 'sdsurf_dm_bfr@sdsu.edu';
+        ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+        END IF;
+        
+         my_email_body :=
+               'A 29C BFR for '
+            || bfr29c_null_check.fundcode
+            || ' - '
+            || bfr29c_null_check.fundtitle
+            || ' has been forwarded to the 29CBFR Inbox for processing.';
+         p_send_email ('sdsurf_dm_admin@sdsu.edu',
+                       my_email_address,
+                       '29CBFR for Fund ' || bfr29c_null_check.fundcode || '.',
+                       my_email_body
+                      );
+         nw_audit.audit_wf_bfr5add (myfolderid,
+                                    inbox,
+                                    '0',
+                                    userid,
+                                    'New 29C BFR/BFR29CROUTE2BFR'
+                                   );
+      END IF;
+   END IF;
+END;
+/

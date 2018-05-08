@@ -1,0 +1,641 @@
+CREATE OR REPLACE PACKAGE BODY NOLIJWEB."NW_BFR_EMAILS" 
+AS
+
+  PROCEDURE c08_sigauth (v_folder_id IN VARCHAR2, v_doctype_code IN VARCHAR2, v_nw_created_by IN NUMBER)
+  IS
+  v_db_name            gubinst.gubinst_instance_name%TYPE;
+  v_prod_host 		   VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+  v_doctype_name       kw_wfdtval.wfdtval_wfdt_name%TYPE;
+  v_sigcard_name       kw_wfdtval.wfdtval_wfdt_name%TYPE;
+  v_nw_user_id         kw_userval.userval_user_id%TYPE;
+  v_fund_code          VARCHAR2(6);
+  v_fund_title         ftvfund.ftvfund_title%TYPE;
+  v_email_addr         VARCHAR2(56);
+  v_admin_pidm         NUMBER(8);
+  v_admin_name         VARCHAR2(80);
+  v_email_body         VARCHAR2(512);
+  crlf                 VARCHAR2 (2) := CHR (10)
+                                    || CHR (13); --Carriage Return and line feed
+
+   BEGIN
+
+     v_fund_code := SUBSTR(v_folder_id,1,6);
+     
+     --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+    
+    SELECT wfdtval_wfdt_name INTO v_doctype_name 
+      FROM kw_wfdtval
+      WHERE wfdtval_wfdt_code = v_doctype_code;
+      
+    SELECT wfdtval_wfdt_name INTO v_sigcard_name 
+      FROM kw_wfdtval
+      WHERE wfdtval_wfdt_code = 17;
+    
+    SELECT userval_user_id INTO v_nw_user_id
+      FROM kw_userval
+      WHERE userval_user_code = v_nw_created_by;
+    
+    SELECT ftvfund_fmgr_code_pidm, ftvfund_title INTO v_admin_pidm, v_fund_title
+      FROM ftvfund 
+      WHERE ftvfund_fund_code = v_fund_code 
+      AND ftvfund_nchg_date > SYSDATE;
+                
+    SELECT spriden_first_name||' '||spriden_last_name INTO v_admin_name
+      FROM spriden
+      WHERE spriden_pidm = v_admin_pidm
+      AND spriden_change_ind IS NULL;
+      
+    IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+        v_email_addr := 'sdsurf_dm_sra@sdsu.edu'; 
+      ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+    END IF;
+      
+    --Send Email
+    v_email_body := 'A ['||v_doctype_name||'] document was added to fund folder - '||
+                     v_folder_id || ' by '||v_nw_user_id||'.'||
+                    crlf||
+                    'Please verify that this is a '||v_doctype_name||
+                    ' and NOT a '||v_sigcard_name||' doctype.'||
+                    crlf||
+                    crlf||               
+                    'FUND TITLE: '||v_fund_code||' - '||v_fund_title ||crlf||
+                    'FUND ADMIN: '||v_admin_name;  
+    
+    p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'Notice - '||v_doctype_name||' added to Fund: '||v_fund_code, v_email_body);
+
+   END; -- c08_sigauth
+
+  
+  PROCEDURE compliance (v_prop_code IN VARCHAR2, v_wfdt_code IN VARCHAR2, v_grant_code IN VARCHAR2, v_fund_code IN VARCHAR2, v_arra_attr IN VARCHAR2)
+  IS
+  v_db_name            gubinst.gubinst_instance_name%TYPE;
+  v_prod_host 		   VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+  v_doctype_name       KW_WFDTVAL.wfdtval_wfdt_name%TYPE := NULL;
+  v_email_subject      VARCHAR2(256) := NULL;
+  v_email_body         VARCHAR2(1000) := NULL;
+  v_prop_title         frbprop.frbprop_long_title%TYPE := NULL;
+  v_prop_agency        spriden.spriden_last_name%TYPE := NULL;
+  v_fund_agency        spriden.spriden_last_name%TYPE := NULL;
+  v_grant_sponsor_id   frbgrnt.frbgrnt_sponsor_id%TYPE;
+  v_fund_start_date    fwbfndo.fwbfndo_start_date%TYPE;
+  v_fund_title         ftvfund.ftvfund_title%TYPE;
+  v_attr_list          VARCHAR2(2048) := NULL;
+  v_email_addr         VARCHAR2(56);
+  v_pi_pidm            NUMBER(8);
+  v_pi_name            VARCHAR2(80);
+  v_pi_email           VARCHAR2(90);
+  v_admin_pidm         NUMBER(8);
+  v_admin_name         VARCHAR2(80);
+  crlf                 VARCHAR2 (2) := CHR (10)
+                                    || CHR (13); --Carriage Return and line feed
+
+  BEGIN
+   
+    SELECT gubinst_instance_name INTO v_db_name FROM gubinst;
+      
+      --Start Proposal Messaging
+         IF SUBSTR(v_prop_code,1,1) = 'S' THEN 
+        
+             IF nw_bfrmods.sdat_propgrant_check(v_prop_code,NULL,'INTERNATIONAL SPONSORS') THEN
+                v_attr_list := '* INTERNATIONAL SPONSORS'||crlf;
+             END IF;
+             IF nw_bfrmods.sdat_propgrant_check(v_prop_code,NULL,'INTERNATIONAL ACTIVITY') THEN
+                v_attr_list := v_attr_list||'* INTERNATIONAL ACTIVITY'||crlf;
+             END IF;
+--             Canceled per Sandra Nordahl  
+--             IF nw_bfrmods.sdat_propgrant_check(v_prop_code,NULL,'SUBCONTRACTS ANTICIPATED') THEN
+--                v_attr_list := v_attr_list||'* SUBCONTRACTS ANTICIPATED'||crlf;
+--             END IF;
+--             IF nw_bfrmods.sdat_propgrant_check(v_prop_code,NULL,'COST SHARING') THEN
+--                v_attr_list := v_attr_list||'* COST SHARING'||crlf;
+--             END IF;
+--             IF nw_bfrmods.sdat_propgrant_check(v_prop_code,NULL,'SUBCONTRACTS BUDGETED') THEN
+--                v_attr_list := v_attr_list||'* SUBCONTRACTS BUDGETED'||crlf;
+--             END IF;
+             
+             IF v_attr_list IS NOT NULL THEN
+                
+                SELECT frbprop_long_title INTO v_prop_title
+                FROM frbprop
+                WHERE frbprop_code = v_prop_code;
+
+                v_prop_agency := nw_bfrmods.get_agency_from_proposal(v_prop_code);
+                
+                SELECT wfdtval_wfdt_name INTO v_doctype_name FROM KW_WFDTVAL
+                WHERE wfdtval_wfdt_code = v_wfdt_code;
+                
+                v_email_subject := v_doctype_name|| ' - Compliance Issue Review - ' || v_prop_code;
+                
+              -- Build email body for Proposal-based messages
+                v_email_body := 'An ['||v_doctype_name||'] doctype is now available '||
+                'in NolijWeb for PROPOSAL - '||v_prop_code||' '||crlf||
+                
+                'with the Following User Defined Attributes:'||crlf||
+                               
+                 v_attr_list ||
+                 
+                 'Please review the document(s) in NolijWeb''s SRD Proposal Files role.' ||crlf||crlf||
+                 '******************************'||crlf||
+                 'PROPOSAL - '||v_prop_code
+                 ||crlf||
+                 'TITLE - '||v_prop_title
+                 ||crlf||
+                 'AGENCY - '||v_prop_agency;
+                 
+                IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+                    v_email_addr := 'sdsurf_dm_compliance@sdsu.edu'; 
+                    ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+                END IF; 
+              
+              --Send email
+                p_send_email('sdsurf_dm_admin@sdsu.edu', v_email_addr, v_email_subject, v_email_body);
+               
+              END IF;
+         
+         END IF;
+         
+      --Start Fund Messaging
+      
+         IF SUBSTR(v_fund_code,1,1) = '5' THEN 
+        
+             IF nw_bfrmods.sdat_fund_check(v_fund_code,'INTERNATIONAL SPONSORS') THEN
+                v_attr_list := '* INTERNATIONAL SPONSORS'||crlf;
+             END IF;
+             IF nw_bfrmods.sdat_fund_check(v_fund_code,'INTERNATIONAL ACTIVITY') THEN
+                v_attr_list := v_attr_list||'* INTERNATIONAL ACTIVITY'||crlf;
+             END IF;
+             
+--             Canceled per Sandra Nordahl  
+--             IF nw_bfrmods.sdat_fund_check(v_fund_code,'SUBCONTRACTS ANTICIPATED') THEN
+--                v_attr_list := v_attr_list||'* SUBCONTRACTS ANTICIPATED'||crlf;
+--             END IF;
+--             IF nw_bfrmods.sdat_fund_check(v_fund_code,'COST SHARING') THEN
+--                v_attr_list := v_attr_list||'* COST SHARING'||crlf;
+--             END IF;
+--             IF nw_bfrmods.sdat_fund_check(v_fund_code,'SUBCONTRACTS BUDGETED') THEN
+--                v_attr_list := v_attr_list||'* SUBCONTRACTS BUDGETED'||crlf;
+--             END IF;
+             
+             IF v_attr_list IS NOT NULL THEN
+                
+                SELECT ftvfund_title INTO v_fund_title
+                  FROM ftvfund 
+                 WHERE ftvfund_fund_code = v_fund_code 
+                   AND ftvfund_nchg_date > SYSDATE;
+                   
+                v_fund_agency := nw_bfrmods.get_agency_from_fund(v_fund_code);
+                
+                SELECT wfdtval_wfdt_name INTO v_doctype_name FROM KW_WFDTVAL
+                WHERE wfdtval_wfdt_code = v_wfdt_code;
+                
+                v_email_subject := v_arra_attr||v_doctype_name|| ' - Received for Fund - ' || v_fund_code;
+                
+              -- Build email body for Proposal-based messages
+                v_email_body := 'An ['||v_doctype_name||'] doctype is now available '||
+                'in NolijWeb for '||v_arra_attr||'Fund - '||v_fund_code||' '||crlf||
+                
+                'with the Following User Defined Attributes:'||crlf||
+                               
+                 v_attr_list ||
+                 
+                 'Please review the document(s) in NolijWeb''s SRD Proposal Files role and FUND Query.' ||crlf||crlf||
+                 '******************************'||crlf||
+                 'FUND - '||v_fund_code
+                 ||crlf||
+                 'TITLE - '||v_fund_title
+                 ||crlf||
+                 'AGENCY - '||v_fund_agency;
+                 
+                 IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+                    v_email_addr := 'sdsurf_dm_compliance@sdsu.edu'; 
+                    ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+                 END IF;
+              
+              --Send email
+                p_send_email('sdsurf_dm_admin@sdsu.edu', v_email_addr, v_email_subject, v_email_body);
+               
+              END IF;
+         
+         END IF;
+
+  END; --compliance
+
+
+  PROCEDURE crmse (v_fund_code IN VARCHAR2, v_grant_code IN VARCHAR2, v_prop_code IN VARCHAR2)
+  IS
+  v_db_name                     gubinst.gubinst_instance_name%TYPE;
+  v_prod_host 		           VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+  v_grant_sponsor_id         frbgrnt.frbgrnt_sponsor_id%TYPE;
+  v_fund_start_date           fwbfndo.fwbfndo_start_date%TYPE;
+  v_fund_title                    ftvfund.ftvfund_title%TYPE;
+  v_email_addr                 goremal.goremal_email_address%TYPE;
+  v_pi_pidm                      NUMBER(8);
+  v_pi_name                     VARCHAR2(80);
+  v_pi_email                     VARCHAR2(90);
+  v_admin_pidm               NUMBER(8);
+  v_admin_name              VARCHAR2(80);
+  v_admin_email_addr     goremal.goremal_email_address%TYPE;
+  v_admin_area               sprtele.sprtele_phone_area%TYPE;
+  v_admin_number          VARCHAR2 (24); 
+  v_pidm_count               NUMBER(2);
+  
+  v_email_body               VARCHAR2(512);
+  crlf                              VARCHAR2 (2) := CHR (10)
+                                    || CHR (13); --Carriage Return and line feed
+
+   BEGIN
+
+    --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+    
+    --Get PI PIDM for Fund
+    v_pi_pidm := SDSUFOWN01.signature_card_tracking_pkg.retrieve_pidm(v_fund_code,'PI');
+    
+/**  
+    --Get PI Email Address for Fund
+    v_pi_email := SDSUFOWN01.signature_card_tracking_pkg.get_email_from_pidm(v_pi_pidm);
+**/
+
+    --Get SRA Admin PIDM for Fund
+    v_admin_pidm := signature_card_tracking_pkg.retrieve_pidm(v_fund_code,'SRA');
+
+    --Get  Fund Title  
+    SELECT ftvfund_title INTO  v_fund_title
+      FROM ftvfund 
+      WHERE ftvfund_fund_code = v_fund_code 
+      AND ftvfund_nchg_date > SYSDATE;
+      
+    --Get PI Name  
+    SELECT spriden_first_name||' '||spriden_last_name INTO v_pi_name
+      FROM spriden
+      WHERE spriden_pidm = v_pi_pidm
+      AND spriden_change_ind IS NULL;
+                
+    --Get SRA Administrator Name
+    SELECT spriden_first_name||' '||spriden_last_name INTO v_admin_name
+      FROM spriden
+      WHERE spriden_pidm = v_admin_pidm
+      AND spriden_change_ind IS NULL;
+
+    --Get SRA Administrator Email  Address
+    NW_BFRMODS.get_sra_adm_addr(v_fund_code, v_admin_email_addr); --(my_fund_code IN, my_email_address OUT)   
+
+    --Get SR Admin Phone Number
+    v_admin_number := SDSUFOWN01.signature_card_tracking_pkg.get_phone_from_pidm(v_admin_pidm,'MG');
+ 
+    --Get Grant Sponsor
+    SELECT frbgrnt_sponsor_id INTO v_grant_sponsor_id
+      FROM frbgrnt 
+      WHERE frbgrnt_code = v_grant_code;  
+ 
+    --Get Fund Start Date 
+    SELECT fwbfndo_start_date INTO v_fund_start_date
+      FROM fwbfndo 
+      WHERE fwbfndo_fund_code = v_fund_code;
+    
+    
+    IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+        v_email_addr := 'sdsurf_dm_crmse@sdsu.edu'; 
+      ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+    END IF;
+      
+    --Send Email
+    v_email_body := 'The following New CRMSE Fund has been created:' ||crlf||
+                    'FUND: '||v_fund_code||' - '||v_fund_title ||crlf||
+                    'CONTRACT NUMBER: '||v_grant_sponsor_id ||crlf||
+                    'START DATE: '||v_fund_start_date ||crlf||
+                    'PI: '||v_pi_name ||crlf||
+                    'PROPOSAL CODE: '||v_prop_code ||crlf||
+                    crlf||
+                    'If you have any questions, please contact your SDSU Research Foundation Administrator.'||
+                    crlf||
+                    'ADMINISTRATOR: '||v_admin_name ||crlf||
+                    'EMAIL: '||v_admin_email_addr ||crlf||
+                    'PHONE: '||v_admin_number ||crlf||
+                    crlf||
+                    crlf||
+                    crlf||
+                    crlf||
+                    crlf||
+                    'NW_BFR_EMAILS.CRMSE';
+    
+    p_send_email('sdsurf_dm_sra@sdsu.edu',v_email_addr,'New CRMSE Fund Created.  Fund: '||v_fund_code, v_email_body);
+
+   END;  --crmse
+
+  
+--  PROCEDURE e_verify (v_fund_code IN VARCHAR2, v_grant_code IN VARCHAR2, v_prop_code IN VARCHAR2)
+--  IS
+--  v_db_name            gubinst.gubinst_instance_name%TYPE;
+--  v_grant_sponsor_id   frbgrnt.frbgrnt_sponsor_id%TYPE;
+--  v_fund_start_date    fwbfndo.fwbfndo_start_date%TYPE;
+--  v_fund_title         ftvfund.ftvfund_title%TYPE;
+--  v_email_addr         VARCHAR2(36);
+--  v_pi_pidm            NUMBER(8);
+--  v_pi_name            VARCHAR2(80);
+--  v_pi_email           VARCHAR2(90);
+--  v_admin_pidm         NUMBER(8);
+--  v_admin_name         VARCHAR2(80);
+--  v_email_body         VARCHAR2(512);
+--  crlf                 VARCHAR2 (2) := CHR (10)
+--                                    || CHR (13); --Carriage Return and line feed
+
+
+--   BEGIN
+
+--    --Get Database name
+--    SELECT gubinst_instance_name INTO v_db_name 
+--      FROM gubinst;
+--    
+--    --Get PI PIDM for Fund
+--    v_pi_pidm := SDSUFOWN01.signature_card_tracking_pkg.retrieve_pidm(v_fund_code,'PI');
+--    
+--    --Get PI Email Address for Fund
+--    v_pi_email := SDSUFOWN01.signature_card_tracking_pkg.get_email_from_pidm(v_pi_pidm);
+
+
+--    --Get SRA Admin PIDM for Fund
+--    v_admin_pidm := signature_card_tracking_pkg.retrieve_pidm(v_fund_code,'SRA');
+
+--    SELECT ftvfund_fmgr_code_pidm, ftvfund_title INTO v_admin_pidm, v_fund_title
+--      FROM ftvfund 
+--      WHERE ftvfund_fund_code = v_fund_code 
+--      AND ftvfund_nchg_date > SYSDATE;
+
+--    SELECT spriden_first_name||' '||spriden_last_name INTO v_pi_name
+--      FROM spriden
+--      WHERE spriden_pidm = v_pi_pidm
+--      AND spriden_change_ind IS NULL;
+--                
+--    SELECT spriden_first_name||' '||spriden_last_name INTO v_admin_name
+--      FROM spriden
+--      WHERE spriden_pidm = v_admin_pidm
+--      AND spriden_change_ind IS NULL;
+--      
+--    SELECT frbgrnt_sponsor_id INTO v_grant_sponsor_id
+--      FROM frbgrnt 
+--      WHERE frbgrnt_code = v_grant_code;  
+-- 
+--    SELECT fwbfndo_start_date INTO v_fund_start_date
+--      FROM fwbfndo 
+--      WHERE fwbfndo_fund_code = v_fund_code;
+--      
+--    IF v_db_name = 'PROD' THEN
+--        v_email_addr := 'nw_everify@foundation.sdsu.edu'; 
+--      ELSE v_email_addr := 'nw_admin@foundation.sdsu.edu';
+--    END IF;
+--      
+--    --Send Email
+--    v_email_body := 'The following fund is a Federal Contract that contains the e-Verify clause.' ||crlf||
+--                    'FUND: '||v_fund_code||' - '||v_fund_title ||crlf||
+--                    'ADMINISTRATOR: '||v_admin_name ||crlf||
+--                    'CONTRACT NUMBER: '||v_grant_sponsor_id ||crlf||
+--                    'START DATE: '||v_fund_start_date ||crlf||
+--                    'PI: '||v_pi_name ||crlf||
+--                    crlf||
+--                    'SOURCE PROPOSAL CODE: '||v_prop_code;
+--    
+--    p_send_email('nolij@foundation.sdsu.edu',v_email_addr,'Fund with E-Verify Clause Received.  Fund: '||v_fund_code, v_email_body);
+
+--   END; --e-verify
+
+   
+  PROCEDURE oa03_univstaff (v_folder_id IN VARCHAR2, v_doctype_code IN VARCHAR2, v_nw_created_by IN NUMBER)
+  IS
+  v_db_name            gubinst.gubinst_instance_name%TYPE;
+  v_prod_host 		   VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+  v_doctype_name       kw_wfdtval.wfdtval_wfdt_name%TYPE;
+  v_nw_user_id         kw_userval.userval_user_id%TYPE;
+  v_fund_code          VARCHAR2(6);
+  v_fund_title         ftvfund.ftvfund_title%TYPE;
+  v_email_addr         VARCHAR2(56);
+  v_admin_pidm         NUMBER(8);
+  v_admin_name         VARCHAR2(80);
+  v_email_body         VARCHAR2(512);
+  crlf                 VARCHAR2 (2) := CHR (10)
+                                    || CHR (13); --Carriage Return and line feed
+
+   BEGIN
+
+     --get first letter of folder ID to check if fund or proposal(S)
+     v_fund_code := SUBSTR(v_folder_id,1,6);
+     
+     --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+    
+    SELECT wfdtval_wfdt_name INTO v_doctype_name 
+      FROM kw_wfdtval
+      WHERE wfdtval_wfdt_code = v_doctype_code;
+      
+    
+    SELECT userval_user_id INTO v_nw_user_id
+      FROM kw_userval
+      WHERE userval_user_code = v_nw_created_by;
+    
+    SELECT ftvfund_fmgr_code_pidm, ftvfund_title INTO v_admin_pidm, v_fund_title
+      FROM ftvfund 
+      WHERE ftvfund_fund_code = v_fund_code 
+      AND ftvfund_nchg_date > SYSDATE;
+                
+    SELECT spriden_first_name||' '||spriden_last_name INTO v_admin_name
+      FROM spriden
+      WHERE spriden_pidm = v_admin_pidm
+      AND spriden_change_ind IS NULL;
+      
+    IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+        v_email_addr := 'sdsurf_dm_effortreporting@sdsu.edu'; 
+      ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+    END IF;
+      
+    --Send Email
+    v_email_body := 'A ['||v_doctype_name||'] document was added to fund folder - '||
+                     v_folder_id || ' by '||v_nw_user_id||'.'||
+                    crlf||
+                    'Please keep track of reimbursed time.'||
+                    crlf||
+                    crlf||               
+                    'FUND TITLE: '||v_fund_code||' - '||v_fund_title ||crlf||
+                    'FUND ADMIN: '||v_admin_name;  
+    
+    p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'Notice - '||v_doctype_name||' added to Fund: '||v_fund_code, v_email_body);
+
+   END; --oa03_univstaff
+
+   
+  PROCEDURE trafficking (v_fund_code IN VARCHAR2, v_grant_code IN VARCHAR2, v_prop_code IN VARCHAR2)
+  IS
+  v_db_name            gubinst.gubinst_instance_name%TYPE;
+  v_prod_host 		   VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+  v_grant_sponsor_id   frbgrnt.frbgrnt_sponsor_id%TYPE;
+  v_fund_start_date    fwbfndo.fwbfndo_start_date%TYPE;
+  v_fund_title         ftvfund.ftvfund_title%TYPE;
+  v_email_addr         VARCHAR2(56);
+  v_pi_pidm            NUMBER(8);
+  v_pi_name            VARCHAR2(80);
+  v_pi_email           VARCHAR2(90);
+  v_admin_pidm         NUMBER(8);
+  v_admin_name         VARCHAR2(80);
+  v_email_body         VARCHAR2(512);
+  crlf                 VARCHAR2 (2) := CHR (10)
+                                    || CHR (13); --Carriage Return and line feed
+
+   BEGIN
+
+    --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+
+    --Get PI PIDM for Fund
+    v_pi_pidm := SDSUFOWN01.signature_card_tracking_pkg.retrieve_pidm(v_fund_code,'PI');
+ 
+    
+    --Get PI Email Address for Fund
+    v_pi_email := SDSUFOWN01.signature_card_tracking_pkg.get_email_from_pidm(v_pi_pidm);
+
+
+    --Get SRA Admin PIDM for Fund
+    v_admin_pidm := signature_card_tracking_pkg.retrieve_pidm(v_fund_code,'SRA');
+
+    SELECT ftvfund_fmgr_code_pidm, ftvfund_title INTO v_admin_pidm, v_fund_title
+      FROM ftvfund 
+      WHERE ftvfund_fund_code = v_fund_code 
+      AND ftvfund_nchg_date > SYSDATE;
+
+    SELECT spriden_first_name||' '||spriden_last_name INTO v_pi_name
+      FROM spriden
+      WHERE spriden_pidm = v_pi_pidm
+      AND spriden_change_ind IS NULL;
+                
+    SELECT spriden_first_name||' '||spriden_last_name INTO v_admin_name
+      FROM spriden
+      WHERE spriden_pidm = v_admin_pidm
+      AND spriden_change_ind IS NULL;
+      
+    SELECT frbgrnt_sponsor_id INTO v_grant_sponsor_id
+      FROM frbgrnt 
+      WHERE frbgrnt_code = v_grant_code;  
+ 
+    SELECT fwbfndo_start_date INTO v_fund_start_date
+      FROM fwbfndo 
+      WHERE fwbfndo_fund_code = v_fund_code;
+      
+    IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+        v_email_addr := 'sdsurf_dm_trafficking@sdsu.edu'; 
+      ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+    END IF;
+      
+    --Send Email
+    v_email_body := 'The following fund contains the Trafficking clause.' ||crlf||
+                    'FUND: '||v_fund_code||' - '||v_fund_title ||crlf||
+                    'ADMINISTRATOR: '||v_admin_name ||crlf||
+                    'CONTRACT NUMBER: '||v_grant_sponsor_id ||crlf||
+                    'START DATE: '||v_fund_start_date ||crlf||
+                    'PI: '||v_pi_name ||crlf||
+                    crlf||
+                    'SOURCE PROPOSAL CODE: '||v_prop_code ||crlf||
+                    crlf||
+                    crlf||
+                    crlf||
+                    crlf||
+                    'NW_BFR_EMAILS.TRAFFICKING';
+    
+    p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'Fund with Trafficking Clause Received.  Fund: '||v_fund_code, v_email_body);
+
+   END;  --trafficking
+   
+     PROCEDURE trafficking_temp (v_fund_code IN VARCHAR2, v_grant_code IN VARCHAR2, v_prop_code IN VARCHAR2)
+  IS
+  v_db_name            gubinst.gubinst_instance_name%TYPE;
+  v_prod_host 		   VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+  v_grant_sponsor_id   frbgrnt.frbgrnt_sponsor_id%TYPE;
+  v_fund_start_date    fwbfndo.fwbfndo_start_date%TYPE;
+  v_fund_title         ftvfund.ftvfund_title%TYPE;
+  v_email_addr         VARCHAR2(56);
+  v_pi_pidm            NUMBER(8);
+  v_pi_name            VARCHAR2(80);
+  v_pi_email           VARCHAR2(90);
+  v_admin_pidm         NUMBER(8);
+  v_admin_name         VARCHAR2(80);
+  v_email_body         VARCHAR2(512);
+  crlf                 VARCHAR2 (2) := CHR (10)
+                                    || CHR (13); --Carriage Return and line feed
+
+   BEGIN
+
+    --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+
+    --Get PI PIDM for Fund
+    --v_pi_pidm := SDSUFOWN01.signature_card_tracking_pkg.retrieve_pidm(v_fund_code,'PI');
+    SELECT ftvorgn_fmgr_code_pidm INTO v_pi_pidm
+           FROM nw_ftvfund_temp, ftvorgn
+          WHERE ftvfund_orgn_code_def = ftvorgn_orgn_code
+          AND ftvfund_fund_code = v_fund_code
+          AND ftvorgn_nchg_date > SYSDATE
+          AND ftvfund_nchg_date > SYSDATE;
+    
+    --Get PI Email Address for Fund
+    v_pi_email := SDSUFOWN01.signature_card_tracking_pkg.get_email_from_pidm(v_pi_pidm);
+
+
+    --Get SRA Admin PIDM for Fund
+   -- v_admin_pidm := signature_card_tracking_pkg.retrieve_pidm(v_fund_code,'SRA');
+    SELECT ftvfund_fmgr_code_pidm INTO v_admin_pidm
+    FROM nw_ftvfund_temp
+    WHERE ftvfund_fund_code = v_fund_code 
+    AND ftvfund_nchg_date > SYSDATE;
+
+    SELECT ftvfund_title INTO v_fund_title
+      FROM nw_ftvfund_temp
+      WHERE ftvfund_fund_code = v_fund_code 
+      AND ftvfund_nchg_date > SYSDATE;
+
+    SELECT spriden_first_name||' '||spriden_last_name INTO v_pi_name
+      FROM spriden
+      WHERE spriden_pidm = v_pi_pidm
+      AND spriden_change_ind IS NULL;
+                
+    SELECT spriden_first_name||' '||spriden_last_name INTO v_admin_name
+      FROM spriden
+      WHERE spriden_pidm = v_admin_pidm
+      AND spriden_change_ind IS NULL;
+      
+    SELECT frbgrnt_sponsor_id INTO v_grant_sponsor_id
+      FROM frbgrnt 
+      WHERE frbgrnt_code = v_grant_code;  
+ 
+    SELECT fwbfndo_start_date INTO v_fund_start_date
+      FROM nw_fwbfndo_temp
+      WHERE fwbfndo_fund_code = v_fund_code;
+      
+    IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+        v_email_addr := 'sdsurf_dm_trafficking@sdsu.edu'; 
+      ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+    END IF;
+      
+    --Send Email
+    v_email_body := 'The following fund contains the Trafficking clause.' ||crlf||
+                    'FUND: '||v_fund_code||' - '||v_fund_title ||crlf||
+                    'ADMINISTRATOR: '||v_admin_name ||crlf||
+                    'CONTRACT NUMBER: '||v_grant_sponsor_id ||crlf||
+                    'START DATE: '||v_fund_start_date ||crlf||
+                    'PI: '||v_pi_name ||crlf||
+                    crlf||
+                    'SOURCE PROPOSAL CODE: '||v_prop_code ||crlf||
+                    crlf||
+                    crlf||
+                    crlf||
+                    crlf||
+                    'NW_BFR_EMAILS.TRAFFICKING';
+    
+    p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'Fund with Trafficking Clause Received.  Fund: '||v_fund_code, v_email_body);
+
+   END;  --trafficking_temp
+
+END nw_bfr_emails;
+/

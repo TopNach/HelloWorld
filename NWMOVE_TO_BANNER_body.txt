@@ -1,0 +1,508 @@
+CREATE OR REPLACE PROCEDURE NOLIJWEB."NWMOVE_TO_BANNER" (my_folder_id IN varchar2, userid IN varchar2, my_inbox OUT number,
+ my_prompt out VARCHAR2) IS
+ my_fund_code VARCHAR2(6);
+ my_orgn_code VARCHAR2(6);
+ my_email_address VARCHAR2(90);
+ my_pidm NUMBER(8);
+ my_fund_title VARCHAR2(35);
+ my_email_body VARCHAR2(512);
+ my_default_orgn VARCHAR2(3);
+ fwfuorg_count NUMBER(2);
+ ftvfund_orgn_code VARCHAR2(6);
+ ftvfund_count NUMBER(2);
+ previous_fund EXCEPTION;
+ no_orgn_code EXCEPTION;
+ orgn_code_count NUMBER(2);
+ my_grant_code VARCHAR2(9);
+ save_check NUMBER;
+ proposal_code  VARCHAR2(9);
+ my_prop_title  VARCHAR2(35);
+ v_email_addr VARCHAR2(90);
+ my_sdat_code_attr VARCHAR2(64) := NULL;
+
+  frrgusn_ins  NUMBER(6);
+  frrgusn_mbe NUMBER(6);
+  frrgusn_space_rent_fdn NUMBER(6);
+  frrgusn_space_rent_nonfdn NUMBER(6);
+  frrgusn_space NUMBER(6);
+  frrgusn_stipends NUMBER(6);
+  frrgusn_patents NUMBER(6);
+  frrgusn_postdoc NUMBER(6);
+  frrgusn_risk NUMBER(6);
+  frrgusn_foreign NUMBER(6);
+  frrgusn_arra_equipment NUMBER(6);
+--  frrgusn_e_verify NUMBER(2);  --Disabled per Mary Manesis 10/15/2010
+--  frrpusn_e_verify NUMBER(2);  --Disabled per Mary Manesis 10/15/2010
+  
+  l_job            INTEGER;
+  v_db_name        gubinst.gubinst_instance_name%TYPE;
+  v_prod_host 	   VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+  
+  
+  arra BOOLEAN;
+  prior_doc BOOLEAN;
+  award_doc BOOLEAN;
+  arra_tag VARCHAR2(32);
+  award_status VARCHAR2(1);
+  arra_message VARCHAR2(128);
+  my_fund_folder kw_wfdocs.wfdocs_folder_id%TYPE;
+  
+  crlf VARCHAR2 (2) := CHR (10)
+                                   || CHR (13); --Carriage Return and line feed
+                                   
+--   g_dbname                 VARCHAR2 (4) := sdsufown01.dbinfo_pkg.f_get_dbname ();
+--   --  Variables for EXCEPTION handling
+--   g_errcode                NUMBER;
+--   g_errmsg                 VARCHAR2 (200);
+
+BEGIN
+ --
+ -- move data into final Banner Tables FTVFUND, FRVFUND, FWBFNDO
+ --
+ -- Select Database name so external email can be turned off during testing
+ SELECT gubinst_instance_name 
+    INTO v_db_name 
+    FROM gubinst;
+    
+ SELECT COUNT(1)
+   INTO save_check
+   FROM NW_VERIFYSAVE
+   WHERE VERIFYSAVE_FOLDER_ID = my_folder_id;
+
+ IF save_check != 1 THEN
+ 
+ my_inbox := -1;
+ 
+ my_prompt := 'Please review the BFR Form for changes (save icon should be disabled). If there are no changes, hit route again to move data to Banner.';
+ 
+ /*
+ my_prompt := '--NOT ROUTED--  PLEASE REVIEW THE BFR FORM FOR CHANGES'||CHR(13)||
+              '(SAVE ICON SHOULD BE DISABLED AND THERE SHOULD BE NO BLUE FIELDS IN YOUR FORM)'||CHR(13)||
+              'IF THERE ARE NO CHANGES HIT ROUTE AGAIN TO MOVE DATA TO BANNER'||CHR(13)||
+              'IF THERE ARE CHANGES HIT SAVE FIRST THEN HIT ROUTE TO MOVE DATA TO BANNER'||TO_CHAR(save_check);
+ */
+   INSERT INTO NW_VERIFYSAVE (VERIFYSAVE_FOLDER_ID,VERIFYSAVE_ACTIVITY_DATE)
+   VALUES (my_folder_id,SYSDATE);
+ ELSE
+
+   DELETE FROM NW_VERIFYSAVE
+   WHERE VERIFYSAVE_FOLDER_ID = my_folder_id;
+
+   SELECT default_orgn,FTVFUND_ORGN_CODE_DEF,FTVFUND_FUND_CODE,FTVFUND_GRNT_CODE INTO my_default_orgn,my_orgn_code,my_fund_code,my_grant_code from nw_ftvfund_temp where nolijweb_folder_id = my_folder_id;
+   ftvfund_orgn_code := my_orgn_code;
+   -- check to see if the orgn code exists in ftvorgn and is valid
+   SELECT COUNT(*) INTO orgn_code_count FROM ftvorgn A WHERE a.ftvorgn_orgn_code = my_orgn_code 
+   AND a.ftvorgn_nchg_date > SYSDATE AND a.FTVORGN_TERM_DATE IS NULL;
+        IF orgn_code_count = 0 THEN
+        RAISE no_orgn_code;
+        END IF;
+
+   -- check to see if this fund code already exists in FTVFUND
+   SELECT COUNT(*) INTO ftvfund_count FROM ftvfund WHERE FTVFUND_FUND_CODE = my_fund_code;
+       IF ftvfund_count <> 0 THEN
+       RAISE previous_fund;
+       END IF;
+    -- check to see if the user selected this as a default ORGN
+ 
+   IF my_default_orgn <> 'YES' THEN
+    -- if this not a default ORGN, then
+    -- check to see if a row exists for the fund/orgn combination in fwfuorg
+    -- if not, then insert a row to that table
+    /*
+    select count(*) into fwfuorg_count from fwfuorg where
+    fwfuorg_FUND_CODE = my_fund_code and FWFUORG_ORGN_CODE = my_orgn_code;
+    if fwfuorg_count = 0 then
+    insert into fwfuorg(FWFUORG_FUND_CODE,FWFUORG_ORGN_CODE) values (my_fund_code, my_orgn_code);
+    end if;
+  */
+   ftvfund_orgn_code := NULL;
+   END IF;
+
+  INSERT INTO ftvfund(FTVFUND_COAS_CODE, FTVFUND_FUND_CODE, FTVFUND_EFF_DATE,FTVFUND_ACTIVITY_DATE,
+  FTVFUND_USER_ID,FTVFUND_NCHG_DATE,FTVFUND_FTYP_CODE,FTVFUND_TITLE,FTVFUND_STATUS_IND,
+  FTVFUND_DATA_ENTRY_IND,FTVFUND_POOL_IND,FTVFUND_FUND_CODE_PRED,FTVFUND_ORGN_CODE_DEF,
+  FTVFUND_PROG_CODE_DEF,FTVFUND_BANK_CODE,FTVFUND_FMGR_CODE_PIDM,FTVFUND_ACCT_CODE_REV,
+  FTVFUND_ACCT_CODE_ACCR,FTVFUND_GRNT_CODE,FTVFUND_SRC_CAP_SAME_IND,FTVFUND_CLOSE_PROJ_IND,
+  FTVFUND_EFF_CERT_REQUIRED_IND,FTVFUND_EFF_CERT_ALLOC_IND)-- <<< Added EFF_CERT columns here
+ SELECT FTVFUND_COAS_CODE, FTVFUND_FUND_CODE, FTVFUND_EFF_DATE,TRUNC(FTVFUND_ACTIVITY_DATE),
+  FTVFUND_USER_ID,FTVFUND_NCHG_DATE,FTVFUND_FTYP_CODE,FTVFUND_TITLE,FTVFUND_STATUS_IND,
+  FTVFUND_DATA_ENTRY_IND,FTVFUND_POOL_IND,FTVFUND_FUND_CODE_PRED,ftvfund_orgn_code,
+  FTVFUND_PROG_CODE_DEF,FTVFUND_BANK_CODE,FTVFUND_FMGR_CODE_PIDM,FTVFUND_ACCT_CODE_REV,
+  FTVFUND_ACCT_CODE_ACCR,FTVFUND_GRNT_CODE,'N','N','Y','N' -- <<Added 'N'' and 'N' here after 'N', 'N'. IB
+  FROM nw_ftvfund_temp WHERE nolijweb_folder_id = my_folder_id;
+ --
+ INSERT INTO frvfund(FRVFUND_COAS_CODE,FRVFUND_CODE,FRVFUND_ACTIVITY_DATE,FRVFUND_USER_ID,
+  FRVFUND_EFF_DATE,FRVFUND_NCHG_DATE,FRVFUND_BASI_CODE_IC,FRVFUND_INDR_CODE_RATE,
+  FRVFUND_INDA_CODE_CHARGE,FRVFUND_INDD_CODE_DISTR)
+ SELECT FRVFUND_COAS_CODE,FRVFUND_CODE,FRVFUND_ACTIVITY_DATE,FRVFUND_USER_ID,
+  FRVFUND_EFF_DATE,FRVFUND_NCHG_DATE,FRVFUND_BASI_CODE_IC,FRVFUND_INDR_CODE_RATE,
+  FRVFUND_INDA_CODE_CHARGE,FRVFUND_INDD_CODE_DISTR FROM nw_frvfund_temp WHERE frvfund_folder_id = my_folder_id;
+ --
+ INSERT INTO fwbfndo(FWBFNDO_FUND_CODE,FWBFNDO_ORGN_CODE,FWBFNDO_START_DATE,
+  FWBFNDO_END_DATE,FWBFNDO_CS_IND,FWBFNDO_CS_AMT_DC,
+  FWBFNDO_CS_AMT_IC,FWBFNDO_AWARD_STATUS,FWBFNDO_METHOD,FWBFNDO_MAX_AMT,FWBFNDO_PROG_INC_FUND,FWBFNDO_PROG_IND)
+ SELECT FWBFNDO_FUND_CODE,FWBFNDO_ORGN_CODE,FWBFNDO_START_DATE,
+  FWBFNDO_END_DATE,FWBFNDO_CS_IND,FWBFNDO_CS_AMT_IC,
+  FWBFNDO_CS_AMT_DC,FWBFNDO_AWARD_STATUS,FWBFNDO_METHOD,FWBFNDO_MAX_AMT,FWBFNDO_PROG_INC_FUND,FWBFNDO_PROG_IND
+ FROM nw_fwbfndo_temp WHERE FWBFNDO_FOLDER_ID = my_folder_id;
+ --
+ -- insert a record into the fwvvafo
+ --
+ SELECT FTVFUND_FUND_CODE,FTVFUND_ORGN_CODE_DEF INTO my_fund_code, my_orgn_code from
+  nw_ftvfund_temp WHERE nolijweb_folder_id = my_folder_id;
+ --insert into fwvvafo(fund, orgn, foap) values (my_fund_code, my_orgn_code, my_fund_code||my_orgn_code);
+ --
+ -- select the pieces of the fund information before deleting the temporary record
+ -- this will be used in the subsequent email notification
+ --
+ SELECT FTVFUND_FMGR_CODE_PIDM,FTVFUND_TITLE
+ INTO my_pidm, my_fund_title FROM nw_ftvfund_temp WHERE nolijweb_folder_id = my_folder_id;
+ -- remove record from temp Tables
+ DELETE FROM nw_ftvfund_temp WHERE nolijweb_folder_id = my_folder_id;
+ DELETE FROM nw_frvfund_temp WHERE frvfund_folder_id = my_folder_id;
+ DELETE FROM nw_fwbfndo_temp WHERE FWBFNDO_FOLDER_ID = my_folder_id;
+ -- route to completed items inbox
+ -- create a document index for the new fund orgn code
+ /*
+ insert into kw_wfdocs(WFDOCS_DOCUMENT_ID,WFDOCS_FOLDER_ID,WFDOCS_FILTER_ID,WFDOCS_DEPT_CODE,
+                       WFDOCS_LOCN_CODE,WFDOCS_UTYP_CODE,WFDOCS_WFDT_CODE,WFDOCS_INDEX,WFDOCS_DOC_NAME,
+                       WFDOCS_CSTM_NAME,WFDOCS_SUB_NIDX_CODE,WFDOCS_SUB_INDEX,WFDOCS_URL,WFDOCS_WFDF_CODE,
+                       WFDOCS_IMPORTED,WFDOCS_USER_CODE,WFDOCS_DATE_CREATED,WFDOCS_CREATED_BY,
+                       WFDOCS_DATE_MODIFIED,WFDOCS_MODIFIED_BY)
+ select seq_kw_wfdocs.nextval,my_fund_code||'|PRIME|0000',WFDOCS_FILTER_ID,WFDOCS_DEPT_CODE,
+                       WFDOCS_LOCN_CODE,WFDOCS_UTYP_CODE,WFDOCS_WFDT_CODE,WFDOCS_INDEX,WFDOCS_DOC_NAME,
+                       WFDOCS_CSTM_NAME,WFDOCS_SUB_NIDX_CODE,WFDOCS_SUB_INDEX,WFDOCS_URL,WFDOCS_WFDF_CODE,
+                       WFDOCS_IMPORTED,WFDOCS_USER_CODE,WFDOCS_DATE_CREATED,WFDOCS_CREATED_BY,
+                       WFDOCS_DATE_MODIFIED,WFDOCS_MODIFIED_BY from kw_wfdocs where
+ wfdocs_folder_id = my_folder_id;
+*/
+ UPDATE kw_wfdocs set WFDOCS_FOLDER_ID = my_fund_code||'|PRIME|0000' WHERE wfdocs_folder_id = my_folder_id;
+ 
+ my_fund_folder := my_fund_code||'|PRIME|0000';
+ 
+ SELECT fwbfndo_award_status INTO award_status FROM fwbfndo WHERE fwbfndo_fund_code = my_fund_code;
+ 
+ arra_message := nw_award_status.arra_message(my_fund_folder);
+
+--Delete the completed box markers so this proposal can be routed again in the future
+--the final inbox "uploaded to banner" will be deleted at the beginning... in route2APA
+/*COMMENT OUT MAYBE USE LATER
+ delete from kw_wfcurrent
+   where wfcurrent_folder_id = my_folder_id
+   and (wfcurrent_wfde_code =  boxnum('New 5Ldg SRD','Completed and routed to SRA WorkFlow')
+     or wfcurrent_wfde_code =  boxnum('New 5Ldg SRA','Completed and routed to F&A WorkFlow')
+       );
+*/
+
+ --Revisit this.  Bookmarks are linked to Doc ID.  need to update those links or replace.
+ --delete from kw_wfdocs where wfdocs_folder_id = my_folder_id;
+
+
+ --
+ -- send email notification out to the creator of the fund record
+ --
+ 
+  --REMOVE - FOR TESTING ONLY
+
+--------------------------------------------------
+  --Send Notice to Fund Admin if PROD, else send to Nolij Admin
+ IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+      SELECT GOREMAL_EMAIL_ADDRESS INTO my_email_address 
+        FROM goremal 
+          WHERE GOREMAL_PIDM = my_pidm;
+    ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+ END IF;
+
+ IF award_status = 'R' THEN  
+    my_email_body := 'BFR has been completed for Fund'||':'||my_fund_code||' '||my_orgn_code||' '||my_fund_title||' with Grant Code: '||my_grant_code
+    ||crlf||'This fund has been set up in anticipation of an ARRA award. Spending is not yet allowed but requires preparation for expected award';
+    --Send Email
+    p_send_email('sdsurf_dm_bfr@sdsu.edu',my_email_address,'ARRA BFR Completed for '||my_fund_code, my_email_body);
+
+    ELSE
+    my_email_body := 'BFR has been completed for Fund'||':'||my_fund_code||' '||my_orgn_code||' '||my_fund_title||' with Grant Code: '||my_grant_code;
+    --Send Email
+    p_send_email('sdsurf_dm_bfr@sdsu.edu',my_email_address,'BFR Completed for '||my_fund_code, my_email_body); 
+ END IF;
+ -------------------------------------------------
+ 
+ -------------------------------------------------
+   
+-- send out other emails for additional attributes
+SELECT frbprop_code, frbprop_title INTO proposal_code, my_prop_title FROM frbprop WHERE frbprop_code = my_folder_id;
+
+-------------------------------------------------
+    
+ IF nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'POSTDOC FELLOW/TRAIN') 
+    THEN my_sdat_code_attr := 'POSTDOC FELLOW/TRAIN';
+        IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN v_email_addr := nw_bfrmods.sdat_email (my_sdat_code_attr);
+        ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+        END IF;
+       
+    IF    award_status = 'R' THEN
+            my_email_body := arra_tag||'FUND: '||my_fund_code||' - '||my_fund_title||crlf||'This fund has been set up in anticipation of an ARRA award. Spending is not yet allowed but requires review for POSTDOC FELLOW/TRAIN in preparation for expected award.  You will be notified when award has been received. You may view the file in Nolijweb using the Award Files role.';
+            p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'POSTDOC FELLOW/TRAIN - Document Review Requested for FUND: '||my_fund_code, my_email_body);
+    ELSIF award_status != 'R' THEN
+            my_email_body := proposal_code||' - '||my_prop_title||' has been awarded and requires review for POSTDOC FELLOW/TRAIN.  You may view the file in Nolijweb using the Award Files role.  FUND: '||my_fund_code||' - '||my_fund_title;
+            p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'POSTDOC FELLOW/TRAIN - Award Document has been received for '||proposal_code, my_email_body);
+    END IF;
+    
+ END IF;
+--------------------------------------------------
+
+--------------------------------------------------
+
+ IF nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'PATENTS/INTELLECTUAL PROPERTY')
+    THEN my_sdat_code_attr := 'PATENTS/INTELLECTUAL PROPERTY';
+        IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN v_email_addr := nw_bfrmods.sdat_email (my_sdat_code_attr);
+        ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+        END IF;
+    
+    IF    award_status = 'R' THEN
+            my_email_body := arra_tag||'FUND: '||my_fund_code||' - '||my_fund_title||crlf||'This fund has been set up in anticipation of an ARRA award. Spending is not yet allowed but requires review for PATENTS/INTELLECTUAL PROPERTY in preparation for expected award.  You will be notified when award has been received. You may view the file in Nolijweb using the Award Files role.';
+            p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'PATENTS/INTELLECTUAL PROPERTY - Document Review Requested for FUND: '||my_fund_code, my_email_body);
+    ELSIF award_status != 'R' THEN
+            my_email_body := proposal_code||' - '||my_prop_title||' has been awarded and requires review for PATENTS/INTELLECTUAL PROPERTY.  You may view the file in Nolijweb using the Award Files role.  FUND:' ||my_fund_code||' - '||my_fund_title;
+            p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'PATENTS/INTELLECTUAL PROPERTY - Award Document has been received for '||proposal_code, my_email_body);
+    END IF;
+
+ END IF;
+--------------------------------------------------
+
+--------------------------------------------------
+
+ IF nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'STIPENDS')
+    THEN my_sdat_code_attr := 'STIPENDS';
+        IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN v_email_addr := nw_bfrmods.sdat_email (my_sdat_code_attr);
+        ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+        END IF;
+    
+    IF    award_status = 'R' THEN
+            my_email_body := arra_tag||'FUND: '||my_fund_code||' - '||my_fund_title||crlf||'This fund has been set up in anticipation of an ARRA award. Spending is not yet allowed but requires review for STIPENDS in preparation for expected award.  You will be notified when award has been received. You may view the file in Nolijweb using the Award Files role.';
+            p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'STIPENDS - Document Review Requested for FUND: '||my_fund_code, my_email_body);
+    ELSIF award_status != 'R' THEN
+            my_email_body := proposal_code||' - '||my_prop_title||' has been awarded and requires review for STIPENDS.  You may view the file in Nolijweb using the Award Files role.  FUND: '||my_fund_code||' - '||my_fund_title;
+            p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'STIPENDS - Award Document has been received for '||proposal_code, my_email_body);
+    END IF;
+
+ END IF;
+ --------------------------------------------------
+ 
+ -------------------------------------------------- 
+
+ IF nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'INSURANCE ISSUES') 
+    OR
+    nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'FOREIGN PROJECTS') 
+    THEN my_sdat_code_attr := 'INSURANCE ISSUES';
+        IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN v_email_addr := nw_bfrmods.sdat_email (my_sdat_code_attr);
+        ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+        END IF;
+    
+    IF   award_status = 'R' THEN
+           my_email_body := arra_tag||'FUND: '||my_fund_code||' - '||my_fund_title||crlf||'This fund has been set up in anticipation of an ARRA award. Spending is not yet allowed but requires review for INSURANCE ISSUES/FOREIGN PROJECTS in preparation for expected award.  You will be notified when award has been received. You may view the file in Nolijweb using the Award Files role.';
+           p_send_email('nolij@foundation.sdsu.edu',v_email_addr,'INSURANCE ISSUES/FOREIGN PROJECTS - Document Review Requested for FUND: '||my_fund_code, my_email_body);
+    ELSIF award_status != 'R' THEN
+            my_email_body := proposal_code||' - '||my_prop_title||' has been awarded and requires review for INSURANCE ISSUES/FOREIGN PROJECTS.  You may view the file in Nolijweb using the Award Files role.  FUND: '||my_fund_code||' - '||my_fund_title;
+            p_send_email('nolij@foundation.sdsu.edu',v_email_addr,'INSURANCE ISSUES/FOREIGN PROJECTS - Award Document has been received for '||proposal_code, my_email_body);
+    END IF;
+    
+ END IF;
+----------------------------------------------------
+
+----------------------------------------------------
+    
+ IF nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'AT RISK ACTIVITIES')
+    THEN my_sdat_code_attr := 'AT RISK ACTIVITIES';
+        IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN v_email_addr := nw_bfrmods.sdat_email (my_sdat_code_attr);
+        ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+        END IF;
+    
+    IF    award_status = 'R' THEN
+            my_email_body := arra_tag||'FUND: '||my_fund_code||' - '||my_fund_title||crlf||'This fund has been set up in anticipation of an ARRA award. Spending is not yet allowed but requires review for AT RISK ACTIVITIES in preparation for expected award.  You will be notified when award has been received. You may view the file in Nolijweb using the Award Files role.';
+            p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'AT RISK ACTIVITIES - Document Review Requested for FUND: '||my_fund_code, my_email_body);
+    ELSIF award_status != 'R' THEN
+            my_email_body := proposal_code||' - '||my_prop_title||' has been awarded and requires review for AT RISK ACTIVITIES.  You may view the file in Nolijweb using the Award Files role.  FUND: '||my_fund_code||' - '||my_fund_title;
+            p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'AT RISK ACTIVITIES - Award Document has been received for '||proposal_code, my_email_body);
+    END IF;
+
+ END IF;
+----------------------------------------------------
+
+----------------------------------------------------
+    
+ IF nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'MBE/WBE') 
+    THEN my_sdat_code_attr := 'MBE/WBE';
+        IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN v_email_addr := nw_bfrmods.sdat_email (my_sdat_code_attr);
+        ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+        END IF;
+        
+    IF    award_status = 'R' THEN
+              my_email_body := arra_tag||'FUND: '||my_fund_code||' - '||my_fund_title||crlf||'This fund has been set up in anticipation of an ARRA award. Spending is not yet allowed but requires review for MBE/WBE in preparation for expected award.  You will be notified when award has been received. You may view the file in Nolijweb using the Award Files role.';
+              p_send_email('nolij@foundation.sdsu.edu',v_email_addr,'MBE/WBE - Document Review Requested for FUND: '||my_fund_code, my_email_body);
+    ELSIF award_status != 'R' THEN
+              my_email_body := proposal_code||' - '||my_prop_title||' has been awarded and requires review for MBE/WBE.  You may view the file in Nolijweb using the Award Files role.  FUND: '||my_fund_code||' - '||my_fund_title;
+              p_send_email('nolij@foundation.sdsu.edu',v_email_addr,'MBE/WBE - Award Document has been received for '||proposal_code, my_email_body);
+    END IF;
+
+ END IF;
+-----------------------------------------------------
+
+----------------------------------------------------
+    
+ IF nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'COST SHARING') 
+    THEN my_sdat_code_attr := 'COST SHARING';
+        IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN v_email_addr := nw_bfrmods.sdat_email (my_sdat_code_attr);
+        ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+        END IF;  
+    
+    IF    award_status = 'R' THEN
+              my_email_body := arra_tag||'FUND: '||my_fund_code||' - '||my_fund_title||crlf||'This fund has been set up in anticipation of an ARRA award. Spending is not yet allowed but requires review for COST SHARING in preparation for expected award.  You will be notified when award has been received. You may view the file in Nolijweb using the Award Files role.';
+              p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'COST SHARING - Document Review Requested for FUND: '||my_fund_code, my_email_body);
+    ELSIF award_status != 'R' THEN
+              my_email_body := 'FUND: '||my_fund_code||' - '||my_fund_title||crlf||'This fund has been awarded and requires review for COST SHARING.  You may view the file in Nolijweb using the Award Files role.  FUND: '||my_fund_code||' - '||my_fund_title;
+              p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'COST SHARING - Document Review Requested for FUND: '||my_fund_code, my_email_body);
+    END IF;
+
+ END IF;
+-----------------------------------------------------
+
+-----------------------------------------------------
+-- START SPONSOR FURNISHED PROPERTY Notification
+    
+ IF nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'SPONSOR FURNISHED PROPERTY') 
+    THEN my_sdat_code_attr := 'SPONSOR FURNISHED PROPERTY';
+        IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN v_email_addr := nw_bfrmods.sdat_email (my_sdat_code_attr);
+        ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+        END IF;
+    
+    IF    award_status = 'R' THEN
+              my_email_body := arra_tag||'FUND: '||my_fund_code||' - '||my_fund_title||crlf||'This fund has been set up in anticipation of an ARRA award. Spending is not yet allowed but requires review for SPONSOR FURNISHED PROPERTY in preparation for expected award. You may view the file in Nolijweb using the Award Files role.';
+              p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'SPONSOR FURNISHED PROPERTY - Document Review Requested for FUND: '||my_fund_code, my_email_body);
+    ELSIF award_status != 'R' THEN
+              my_email_body := proposal_code||' - '||my_prop_title||' has been awarded and requires review for SPONSOR FURNISHED PROPERTY.  You may view the file in Nolijweb using the Award Files role.  FUND: '||my_fund_code||' - '||my_fund_title;
+              p_send_email('sdsurf_dm_admin@sdsu.edu',v_email_addr,'SPONSOR FURNISHED PROPERTY - Award Document has been received for '||proposal_code, my_email_body);
+    END IF;
+
+ END IF;
+
+-- End SPONSOR FURNISHED PROPERTY Notification
+-----------------------------------------------------
+
+-----------------------------------------------------
+    
+    IF NOT nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'ARRA EQUIPMENT GRANTS') AND award_status = 'R'
+       THEN
+       my_sdat_code_attr := 'ARRA EQUIPMENT GRANTS';
+        IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN v_email_addr := nw_bfrmods.sdat_email (my_sdat_code_attr);
+        ELSE v_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+        END IF;
+       my_email_body := arra_tag||'FUND: '||my_fund_code||' - '||my_fund_title||crlf||'This fund has been set up in anticipation of an ARRA award. Spending is not yet allowed but requires review in preparation for expected award.  You will be notified when award has been received. You may view the file in Nolijweb using the Award Files role.';
+       p_send_email('nolij@foundation.sdsu.edu',v_email_addr,'Human Resources - Document Review Requested for FUND: '||my_fund_code, my_email_body);
+    END IF;
+-----------------------------------------------------
+
+-----------------------------------------------------
+--e-Verify notices discontinued, per Mary Manesis and Tja Owens   10/15/2010 I.B. 
+--    IF nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'E-VERIFY')
+--       THEN 
+--       nw_bfr_emails.e_verify(my_fund_code,my_grant_code,proposal_code);
+--    END IF;
+-----------------------------------------------------
+
+-----------------------------------------------------
+-- Trafficking Notices  Broken. Need to fix.  disabled to route 30-JUN-2017  When BFR in process need logic to check FTVFUND_TEMP instead.
+/*
+    IF nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'TRAFFICKING')
+       THEN 
+       nw_bfr_emails.trafficking(my_fund_code,my_grant_code,proposal_code);
+    END IF;
+*/
+-----------------------------------------------------
+
+-----------------------------------------------------
+--CRMSE Notices
+--Temporarily disabled to troubleshoot problem.  17-JUL-2017 IB
+/*
+    IF nw_bfrmods.sdat_propgrant_check (proposal_code,my_grant_code,'CRMSE')
+       THEN 
+       nw_bfr_emails.crmse(my_fund_code,my_grant_code,proposal_code);
+    END IF;
+ */
+-----------------------------------------------------
+
+-----------------------------------------------------
+
+my_prompt:='Uploaded to Banner.  Documents moved to fund folder '||my_fund_code||'.  Use Award File role for additional file processing' ;
+my_inbox:=boxnum('New 5Ldg F&A','Uploaded into Banner');
+
+nw_audit.audit_wf(my_folder_id,my_inbox,my_fund_code,userid,'New 5Ldg F&A/NWMOVE_TO_BANNER');
+
+-- my_inbox := 259;
+-- my_prompt := 'Moving Record into Banner Tables';
+
+--Checking to See if ARRA
+nw_award_status.arra(proposal_code,arra);
+IF arra THEN arra_tag := 'ARRA ';
+ELSE arra_tag := NULL;
+END IF;
+
+--Checking to see if A02 Prior or A03 Award Doc exists
+nw_award_status.prior_doc(my_fund_folder,prior_doc);
+nw_award_status.award_doc(my_fund_folder,award_doc);
+
+--Begin Sending automated sigauth to PI
+    IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+
+            BEGIN
+              qwx.sig_auth.generate_sig_auth(my_fund_code);
+              EXCEPTION WHEN OTHERS THEN NULL;
+            END;
+
+----BEGIN - REMOVE THIS SECTION ONCE PIPROFILE SIGAUTH PROCEDURE CALL REPLACES SIGNATURE CARD CALL ABOVE!           
+--            p_send_email('nolij@foundation.sdsu.edu',
+--                            'sr_admin@foundation.sdsu.edu',
+--                            'Automated SigAuth Not Sent for Fund '||my_fund_code,
+--                            'SigAuth not sent for this fund.  Please set a reminder to manually generate SigAuth for this fund.');
+----END - REMOVE THIS SECTION ONCE PIPROFILE SIGAUTH PROCEDURE CALL REPLACES SIGNATURE CARD CALL ABOVE!              
+
+    ELSE
+        p_send_email('sdsurf_dm_admin@sdsu.edu',
+                            'sdsurf_dm_admin@sdsu.edu',
+                            'Automated SigAuth Not Sent for Fund '||my_fund_code,
+                            'SigAuth not sent because not PROD database. DB( '||v_db_name||' )');
+    
+    END IF;
+--End Sending automated sigauth to PI
+
+END IF;
+
+
+ EXCEPTION
+
+--      WHEN OTHERS THEN
+--         g_errcode   := SQLCODE;
+--         g_errmsg    := SQLERRM;
+--
+--         baninst1.p_send_email (
+--            'OREPAUTOGEN@foundation.sdsu.edu',
+--            'nw_admin@foundation.sdsu.edu',
+--            '*ERROR* - (' ||
+--            g_dbname ||
+--            ') - ' ||
+--            $$plsql_unit ||
+--            '.p_get_runrep_xml_file_info',
+--            'An error occurred when creating, ' ||
+--
+-- 
+--            SUBSTR (g_errmsg, 1, 65) ||
+--            CHR (10) ||
+--            DBMS_UTILITY.format_error_backtrace);
+             
+  WHEN no_orgn_code THEN
+    my_prompt := 'Error: This ORGN code is not valid';
+    my_inbox := -1;
+  WHEN previous_fund THEN 
+    my_prompt := 'Error: FUND CODE Already Exists in FTVFUND';
+    my_inbox := -1; 
+END;
+/

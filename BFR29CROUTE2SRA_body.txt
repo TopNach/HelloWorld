@@ -1,0 +1,95 @@
+CREATE OR REPLACE PROCEDURE NOLIJWEB."BFR29CROUTE2SRA" (
+   myfolderid   IN       VARCHAR2,
+   userid       IN       VARCHAR2,
+   inbox        OUT      NUMBER,
+   prompt       OUT      VARCHAR2
+)
+IS
+   mysra              VARCHAR2 (30);
+   sra_check          NUMBER;
+   my_email_address   goremal.goremal_email_address%TYPE;
+   my_email_body      VARCHAR (1000);
+   v_db_name          gubinst.gubinst_instance_name%TYPE;
+   v_prod_host 		  VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+   
+BEGIN
+
+ --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+      
+   prompt := 'No SRA code selected!';
+   inbox := boxnum ('New 29C BFR', 'Inbox');
+
+   SELECT COUNT (1)
+     INTO sra_check
+     FROM bfr29c_temp
+    WHERE folderid = myfolderid;
+
+   IF sra_check = 0
+   THEN
+      prompt :=
+            'ERROR:'
+         || CHR (13)
+         || CHR (13)
+         || 'YOU MUST SELECT AN SRA AND CLICK SAVE BEFORE ROUTING';
+      inbox := NULL;
+   ELSE
+      SELECT admcode
+        INTO mysra
+        FROM bfr29c_temp
+       WHERE folderid = myfolderid;
+   END IF;
+
+   IF NOT (mysra IS NULL)
+   THEN
+      SELECT wfdeval_wfde_code
+        INTO inbox
+        FROM kw_wfdeval
+       WHERE wfdeval_wfde_name = mysra
+         AND wfdeval_wfma_code = wfnum ('New 29C BFR');
+
+      prompt := 'Routing to ' || mysra;
+      IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+      --Email Admin Route That was routed to
+      SELECT goremal_email_address
+        INTO my_email_address
+        FROM goremal, spriden, bfr29c_temp
+       WHERE admcode IS NOT NULL
+         AND spriden_id = SUBSTR (admcode, 1, 6)
+         AND spriden_change_ind IS NULL
+         AND goremal_pidm = spriden_pidm
+         AND goremal_status_ind = 'A'
+         AND folderid = myfolderid;
+         
+       ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+       END IF;
+
+      my_email_body :=
+            'A fund set-up request '
+         || SUBSTR (myfolderid, 1, 6)
+         || ' has been received in your Nolijweb inbox for processing.  Please log in and select the SRA BFR29C Wkflow Role to process this request';
+      p_send_email ('nolij@foundation.sdsu.edu',
+                    my_email_address,
+                       '29CBFR Request '
+                    || SUBSTR (myfolderid, 1, 6)
+                    || ' received in your Nolij inbox for processing',
+                    my_email_body
+                   );
+     -- p_send_email ('nolij@foundation.sdsu.edu',
+       --             'rraynoha@foundation.sdsu.edu',
+          --             my_email_address
+            --        || '29CBFR Request '
+              --      || SUBSTR (myfolderid, 1, 6)
+                 --   || ' received in your Nolij inbox for processing',
+                 --   my_email_body
+                --   );
+      nw_audit.audit_wf_bfr5add (myfolderid,
+                                 inbox,
+                                 '0',
+                                 userid,
+                                 'New 29C BFR/BFR29CROUTE2SRA'
+                                );
+   END IF;
+END;
+/

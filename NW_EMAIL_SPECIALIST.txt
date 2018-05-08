@@ -1,0 +1,118 @@
+CREATE OR REPLACE PROCEDURE NOLIJWEB."NW_EMAIL_SPECIALIST" (proposal_code in varchar2, inbox out number, prompt out varchar2) is
+
+ my_pidm number(8);
+
+ my_adm varchar2(60);
+
+ my_first_name varchar2(60);
+
+ my_last_name varchar2(60);
+
+ my_email_address varchar2(90);
+
+ my_prop_title varchar2(256);
+
+ my_email_body varchar2(1000);
+
+ my_ftvfund_count number(8);
+ 
+ v_db_name gubinst.gubinst_instance_name%TYPE;
+ 
+ v_prod_host VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+
+begin
+
+ --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+
+-- determine the frrprpi pidm for email generation
+
+ select frrprpi_id_pidm into my_pidm from frrprpi
+
+  where frrprpi_id_ind = 'PSS' and frrprpi_prop_code = proposal_code;
+
+-- determine the email address for the pidm obtained above
+IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+
+  select GOREMAL_EMAIL_ADDRESS into my_email_address from goremal where GOREMAL_PIDM=my_pidm;
+ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+
+END IF;
+
+-- determine the number of distinct admins for the ORGN Code
+
+ select count(distinct ftvfund_fmgr_code_pidm) into my_ftvfund_count
+
+   from ftvfund, spriden
+
+  where ftvfund_fmgr_code_pidm = spriden_pidm (+)
+
+   and spriden_change_ind IS NULL
+
+   and ftvfund_nchg_date > SYSDATE
+
+   and ftvfund_orgn_code_def =
+
+    (SELECT frbprop_orgn_code_resp_office
+
+     FROM frbprop WHERE frbprop_code = proposal_code);
+
+-- if the number of admins is not equal to one then the admin will be ADM075 who will handle the exceptions
+
+ if my_ftvfund_count <> 1 then
+
+   my_adm := 'ADM075';
+
+ else
+
+ SELECT distinct(spriden_id) into my_adm from ftvfund, spriden
+
+  where ftvfund_fmgr_code_pidm = spriden_pidm (+)
+
+  and spriden_change_ind IS NULL
+
+  and ftvfund_nchg_date > SYSDATE
+
+  and ftvfund_orgn_code_def =
+
+  (SELECT frbprop_orgn_code_resp_office
+
+  FROM frbprop
+
+  WHERE frbprop_code = proposal_code);
+
+ end if;
+
+--determine the name of the admin that will handle the award file
+
+select spriden_last_name, spriden_first_name into my_last_name, my_first_name from spriden where
+
+    spriden_id=my_adm and spriden_change_ind is NULL;
+
+-- build the email body and email subject line
+
+  select frbprop_long_title into my_prop_title from frbprop where frbprop_code=proposal_code;
+
+-- send out email to proposal specialist except for ADM075
+
+if my_adm <> 'ADM075' then
+
+  my_email_body := 'The award file for this proposal: '||proposal_code||':'||my_prop_title||' has been sent to '||my_first_name||' '||my_last_name;
+
+  p_send_email('sdsurf_dm_admin@sdsu.edu',my_email_address,'Award Document has been received for '||proposal_code, my_email_body);
+
+else
+
+ my_email_body := 'The award file for this proposal: '||proposal_code||' '||my_prop_title||' has been sent to '||my_first_name||' '||my_last_name|| ' for assignment to an SRA Admin.';
+
+ p_send_email('sdsurf_dm_admin@sdsu.edu',my_email_address,'Award Document has been received for '||proposal_code, my_email_body);
+
+end if;
+
+ select inbox_number into inbox from adm_inboxes where inbox_name = my_adm;
+
+ prompt := 'Routed to:'||my_adm||' '||my_first_name||' '||my_last_name;
+
+end;
+/

@@ -1,0 +1,168 @@
+CREATE OR REPLACE PROCEDURE NOLIJWEB."ROUTE2SRA" (proposal_code in varchar2, userid in varchar2, inbox out number, prompt out varchar2) is
+ my_pidm number(8);
+ my_adm varchar2(60);
+ my_first_name varchar2(60);
+ my_last_name varchar2(60);
+ my_email_address varchar2(90);
+ my_prop_title varchar2(256);
+ my_email_body varchar2(1000);
+ my_ftvfund_count number(8);
+ current_inbox number(6);
+ my_email_test number(2);
+ my_pi_org varchar2(6);
+ my_pi_org_title varchar2(35);
+ my_pss_email varchar2(90);
+ v_db_name gubinst.gubinst_instance_name%TYPE;
+ v_prod_host VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+ 
+ pss_email_error EXCEPTION;
+ 
+-- my_doc_id number;  --Disabled by IB, Part of Link Sending Segment below
+
+BEGIN
+
+ --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+      
+-- get the current inbox
+current_inbox:=curboxnum('New 5Ldg SRD',proposal_code);
+
+-- determine the number of distinct admins for the ORGN Code
+ select count(distinct ftvfund_fmgr_code_pidm) into my_ftvfund_count
+   from ftvfund, spriden
+  where ftvfund_fmgr_code_pidm = spriden_pidm (+)
+   and spriden_change_ind IS NULL
+   and ftvfund_nchg_date > SYSDATE
+   and ftvfund_term_date is NULL
+   and ftvfund_orgn_code_def =
+    (SELECT frbprop_orgn_code_resp_office
+     FROM frbprop WHERE frbprop_code = proposal_code);
+
+-- if the number of admins is not equal to one then the admin will be ADM051 who will handle the exceptions
+ if my_ftvfund_count <> 1 then
+   my_adm := 'ADM075';
+ else
+ SELECT distinct(spriden_id) into my_adm from ftvfund, spriden
+  where ftvfund_fmgr_code_pidm = spriden_pidm (+)
+  and spriden_change_ind IS NULL
+  and ftvfund_nchg_date > SYSDATE
+  --begin added AJV 032805
+  and ftvfund_term_date is NULL
+  --end AJV
+  and ftvfund_orgn_code_def =
+  (SELECT frbprop_orgn_code_resp_office
+  FROM frbprop
+  WHERE frbprop_code = proposal_code);
+ end if;
+
+ select ftvorgn_orgn_code, ftvorgn_title into my_pi_org, my_pi_org_title
+  from ftvorgn, frbprop
+  where ftvorgn_nchg_date > SYSDATE
+  and ftvorgn_term_date is NULL
+  and frbprop_orgn_code_resp_office = ftvorgn_orgn_code
+  and frbprop_code = proposal_code;
+
+--determine the name of the admin that will handle the award file
+select spriden_last_name, spriden_first_name, spriden_pidm into my_last_name, my_first_name,my_pidm from spriden where
+    spriden_id=my_adm and spriden_change_ind is NULL;
+
+-- build the email body and email subject line
+select frbprop_long_title into my_prop_title from frbprop where frbprop_code=proposal_code;
+
+-- determine the frrprpi pidm for email generation
+-- select frrprpi_id_pidm into my_pidm from frrprpi
+--  where frrprpi_id_ind = 'PSS' and frrprpi_prop_code = proposal_code;
+
+-- determine the email address for the pidm obtained above
+--Added PROD logic for AWS I.B. 14-FEB-2018
+  select count(*) into my_email_test from goremal where GOREMAL_PIDM=my_pidm;
+  if my_email_test != 1 then
+    raise pss_email_error;
+  elsif v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+    select GOREMAL_EMAIL_ADDRESS into my_email_address from goremal where GOREMAL_PIDM=my_pidm;
+  else my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+  end if;
+
+-- send out email to proposal specialist except for ADM075
+if my_adm <> 'ADM075' then
+--my_email_body := 'The award file for this proposal: '||proposal_code||':'||my_prop_title||' has been sent to '||my_first_name||' '||my_last_name;
+  my_email_body := 'A 5 ledger award has been received for proposal: '||proposal_code||' "'||my_prop_title||'" for PI '||my_pi_org||' '||my_pi_org_title ||' and has been routed to your Nolijweb SRA Admin 5 Ldgr New Award BFR Wkflow inbox for further processing.';
+  p_send_email('sdsurf_dm_admin@sdsu.edu',my_email_address,'New award for '||my_pi_org||' '||my_pi_org_title, my_email_body);
+  
+  --Temporary debugging message.  Some SRA Admins claim to not receive email.  IB  18JUL2013  --Begin
+  ----p_send_email('nolij@foundation.sdsu.edu','ibarragan@foundation.sdsu.edu','New award for '||my_pi_org||' '||my_pi_org_title, my_email_body||' *** Copy of Email Sent to SR Admin email: ' ||my_email_address);
+  --Temporary debugging message.  Some SRA Admins claim to not receive email.  IB  18JUL2013  --End
+
+ELSE
+
+  my_email_body := 'An award has been received for proposal: '||proposal_code||' "'||my_prop_title||'" and has been routed to your Nolijweb SRA Admin 5 Ldgr New Award BFR Wkflow inbox for assignment to an administrator.';
+
+/*--Disabled by IB but Left for reference in case we need to do this in the future.
+  -------------------------------------------
+  --BEGIN Send Document or Folder Viewer link.  
+  -------------------------------------------
+  --get doc_id for the most recent A03 document in the folder
+  SELECT MAX(wfdocs_document_id)
+  INTO my_doc_id
+  FROM kw_wfdocs
+  JOIN kw_wfdtval ON wfdocs_wfdt_code = wfdtval_wfdt_code
+  WHERE wfdtval_wfdt_name LIKE 'A03%'
+  AND wfdocs_purg_status IS NULL;
+  
+  --If there is an A03 document, email a link to the document viewer. Otherwise, email a link to the folder viewer.
+  IF (my_doc_id IS NOT NULL) THEN
+    my_email_body := my_email_body || chr(10) || 'To view the document, click here: https://nolij.foundation.sdsu.edu/NolijWeb/public/apiLoginCheck.jsp?redir=..%2Fdocumentviewer%2F%3FdocumentId%3D' || my_doc_id;
+  ELSE
+    my_email_body := my_email_body || chr(10) || 'To view the folder, click here: https://nolij.foundation.sdsu.edu/NolijWeb/public/apiLoginCheck.jsp?redir=..%2Ffolderviewer%2F%3Ffolderid%3D' || proposal_code;
+  END IF;
+  -------------------------------------------
+  --END Send Document or Folder Viewer link--
+  -------------------------------------------
+*/
+  
+  --p_send_email('nolij@foundation.sdsu.edu',my_email_address,'Admin Code assignment: new award for '||my_pi_org||' '||my_pi_org_title, my_email_body);
+  --Sent to email address changed to a group address so other managers can receive the notice as well. IB
+  IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+  p_send_email('sdsurf_dm_admin@sdsu.edu','sdsurf_dm_sramanager@sdsu.edu','Admin Code assignment: new award for '||my_pi_org||' '||my_pi_org_title, my_email_body); 
+  ELSE
+  p_send_email('sdsurf_dm_admin@sdsu.edu','sdsurf_dm_admin@sdsu.edu','Admin Code assignment: new award for '||my_pi_org||' '||my_pi_org_title, my_email_body); 
+  END IF;
+  --Temporary debugging message.  Some SRA Admins claim to not receive email.  IB  18JUL2013  --Begin
+  ----p_send_email('nolij@foundation.sdsu.edu','ibarragan@foundation.sdsu.edu','New award for '||my_pi_org||' '||my_pi_org_title, my_email_body||' *** Copy of Email Sent to SR Admin email: ' ||my_email_address);
+  --Temporary debugging message.  Some SRA Admins claim to not receive email.  IB  18JUL2013  --End
+
+end if;
+
+--send email to PSS
+IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+    select goremal_email_address into my_pss_email
+    from frrprpi,goremal
+    where goremal_pidm = frrprpi_id_pidm
+    and frrprpi_id_ind = 'PSS'
+    and frrprpi_prop_code = proposal_code;
+    ELSE my_pss_email := 'sdsurf_dm_admin@sdsu.edu';
+END IF;
+
+p_send_email('sdsurf_dm_admin@sdsu.edu',my_pss_email,'Proposal file routed to SRA','The award for '||proposal_code||' "'||my_prop_title||'" has been routed to ' ||my_first_name||' '||my_last_name||' for further processing.');
+
+inbox:=move2wf('New 5Ldg SRD', 'New 5Ldg SRA', my_adm, proposal_code, userid);
+
+prompt := 'File has been routed to SRA Admin: '||my_adm||' '||my_first_name||' '||my_last_name||' for processing';
+
+EXCEPTION
+ when pss_email_error then
+  prompt := 'PSS for this proposal does not have email address in GOAEMAL';
+  inbox := current_inbox;
+ when no_data_found then
+  prompt := 'Error - Inbox Not Found. No Routing Performed';
+  inbox := current_inbox;
+END;
+
+----------------------------------------------------------------------
+--END: route2sra
+----------------------------------------------------------------------
+----------------------------------------------------------------------
+--START: f_gen_get_color_by_hex
+----------------------------------------------------------------------
+/

@@ -1,0 +1,73 @@
+CREATE OR REPLACE PROCEDURE NOLIJWEB."ROUTE2ADMIN" (WFNAME in varchar2,BoxName in varchar2,FolderID in varchar2,userid IN VARCHAR2) is
+ my_pidm number(8);
+ my_adm varchar2(60);
+ my_first_name varchar2(60);
+ my_last_name varchar2(60);
+ my_email_address varchar2(90);
+ current_inbox number(6);
+ my_email_test number(6);
+ my_boxname varchar2(60);
+ pi_last_name varchar2(60);
+ pi_first_name varchar2(60);
+ my_pi_org varchar2(6);
+ my_prop_title varchar2(256);
+ folder_count number(3);
+ v_db_name            gubinst.gubinst_instance_name%TYPE;
+ v_prod_host 		  VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+ pss_email_error exception;
+ CURSOR ROUTABLE_FOLDER IS
+   SELECT count(*)
+     FROM KW_WFCURRENT
+     WHERE WFCURRENT_FOLDER_ID = FOLDERID
+     AND WFCURRENT_WFDE_CODE = '186'; --RLECHNER
+begin
+
+ --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+
+open ROUTABLE_FOLDER;
+fetch ROUTABLE_FOLDER INTO folder_count;
+  if folder_count != '1' THEN
+         RAISE_APPLICATION_ERROR(-20000,CHR(13)||CHR(13)||CHR(13)||'CANNOT BE ROUTED.  FOLDER NOT IN RLECHNER INBOX.'||CHR(13)||'CLICK FOLDER TO REFRESH WORKFLOW VIEWBAR'||CHR(13)||CHR(13)||CHR(13));
+  end if;
+close ROUTABLE_FOLDER;
+update kw_wfcurrent set wfcurrent_wfde_code=boxnum(WFNAME,BOXNAME) where wfcurrent_folder_id=FOLDERID and wfcurrent_wfma_code = '11' AND WFCURRENT_WFDE_CODE = '186'; --RLECHNER
+nw_audit.audit_wf(folderid,boxnum(WFNAME,BOXNAME),'0',userid,'New 5Ldg SRA/MANUALROUTEFORM/ROUTE2ADMIN');
+--determine the name of the admin that will handle the award file
+select spriden_last_name, spriden_first_name, spriden_pidm,spriden_id into my_last_name, my_first_name,my_pidm,my_adm from spriden where
+    spriden_id=substr(boxname,1,6) and spriden_change_ind is NULL;
+-- determine PI Name
+  SELECT spriden_last_name, spriden_first_name into pi_last_name, pi_first_name
+    FROM spriden
+    WHERE spriden_pidm =
+     (SELECT frrprpi_id_pidm
+      FROM frrprpi
+      WHERE frrprpi_prop_code = folderid
+      AND frrprpi_id_ind = '001')
+    AND spriden_change_ind IS NULL;
+--get pi org
+select ftvorgn_orgn_code into my_pi_org
+  from ftvorgn, frbprop
+  where ftvorgn_nchg_date > SYSDATE
+  and ftvorgn_term_date is NULL
+  and frbprop_orgn_code_resp_office = ftvorgn_orgn_code
+  and frbprop_code = folderid;
+--get prop title
+select frbprop_long_title into my_prop_title from frbprop where frbprop_code=folderid;
+-- determine the email address for the pidm obtained above
+  select count(*) into my_email_test from goremal where GOREMAL_PIDM=my_pidm;
+  if my_email_test != 1 then
+    raise pss_email_error;
+  elsif v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+    select GOREMAL_EMAIL_ADDRESS into my_email_address from goremal where GOREMAL_PIDM=my_pidm;
+  else my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+  
+  end if;
+ p_send_email('sdsurf_dm_admin@sdsu.edu',my_email_address,'New award for '||pi_first_name||' '||pi_last_name, 'A new 5-ledger award has been received for proposal: '||folderid||' "'||my_prop_title||'" for '||my_pi_org||' '||pi_first_name||' '||pi_last_name||'and has been routed to your Nolijweb SRA Admin 5 Ldgr New Award BFR Wkflow inbox for further processing');
+-- prompt := 'File has been routed to SRA Admin: '||my_adm||' '||my_first_name||' '||my_last_name||' for processing';
+  --NOLIJ6
+  nw_frm_pkg.ROUTE_MSG('File has been routed to SRA Admin: '||my_adm||' '||my_first_name||' '||my_last_name||' for processing',userid);
+  --NOLIJ6
+end;
+/

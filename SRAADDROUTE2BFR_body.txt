@@ -1,0 +1,130 @@
+CREATE OR REPLACE PROCEDURE NOLIJWEB."SRAADDROUTE2BFR" (
+   myfolderid   IN       VARCHAR2,
+   userid       IN       VARCHAR2,
+   inbox        OUT      NUMBER,
+   prompt       OUT      VARCHAR2
+)
+IS
+   errormessage       VARCHAR2 (1000);
+   myfundcode         VARCHAR2 (10);
+   myfundtitle        VARCHAR2 (50);
+   my_email_address   VARCHAR2 (90);
+   my_email_body      VARCHAR2 (1000);
+   field_edit         VARCHAR2 (1);
+   null_check         VARCHAR2 (1);
+   add_null_check     nw_additional%ROWTYPE;
+   v_db_name          gubinst.gubinst_instance_name%TYPE;
+   v_prod_host 		  VARCHAR2(32) := 'sunset.foundation.sdsu.edu';  
+
+   CURSOR add_cursor
+   IS
+      SELECT *
+        FROM nw_additional
+       WHERE fund = SUBSTR (myfolderid, 1, 6);
+BEGIN
+
+ --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+
+   /*SET field_edit flag or null_check flag if user tries to route an folder with EMPTY or BFRwith nulls*/
+   SELECT COUNT (1)
+     INTO field_edit
+     FROM frbgrnt, nw_additional
+    WHERE frbgrnt_code = grantno AND fund = SUBSTR (myfolderid, 1, 6);
+
+   OPEN add_cursor;
+
+   FETCH add_cursor
+    INTO add_null_check;
+
+   IF add_cursor%NOTFOUND
+   THEN
+      null_check := '1';
+   END IF;
+
+   IF    add_null_check.icrate = 'NULL'
+      OR add_null_check.iccost = 'NULL'
+      OR add_null_check.icdist = 'NULL'
+      OR add_null_check.fundstartm = 'NULL'
+      OR add_null_check.fundstartd = 'NULL'
+      OR add_null_check.fundstarty = 'NULL'
+      OR add_null_check.fundendm = 'NULL'
+      OR add_null_check.fundendd = 'NULL'
+      OR add_null_check.fundendy = 'NULL'
+      OR add_null_check.costshare = 'NULL'
+      OR add_null_check.awardstat = 'NULL'
+      OR add_null_check.proginc = 'NULL'
+      OR add_null_check.method = 'NULL'
+      OR add_null_check.totaldir = 'NULL'
+      OR add_null_check.totalind = 'NULL'
+      OR add_null_check.maxi = 'NULL'
+      OR add_null_check.fund = 'NULL'
+      OR add_null_check.grantno = 'NULL'
+      OR add_null_check.fundtitle = 'NULL'
+      OR add_null_check.predfund = 'NULL'
+      OR add_null_check.orgcode = 'NULL'
+      OR add_null_check.deforg = 'NULL'
+      OR add_null_check.defprog = 'NULL'
+      OR add_null_check.ADMIN = 'NULL'
+      OR add_null_check.unbilledar = 'NULL'
+      OR add_null_check.revacct = 'NULL'
+      OR add_null_check.icbasis = 'NULL'
+   THEN
+      null_check := '1';
+   END IF;
+
+   IF field_edit = '0' OR null_check = '1'
+   THEN
+      prompt :=
+            'ERROR: '
+         || CHR (13)
+         || CHR (13)
+         || 'MISSING REQUIRED FIELDS. NEED TO ENTER DATA AND SAVE FORM BEFORE ROUTING'
+         || CHR (13)
+         || CHR (13)
+         || 'FOLDER FOR FUND '
+         || SUBSTR (myfolderid, 1, 6)
+         || ' NOT ROUTED';
+   ELSE
+      prompt := 'Passed validation, successfully routed to BFR inbox';
+      inbox := boxnum ('New 5Ldg SRA ADD', 'BFR');
+      /*nolij consultant called sraadd_validate_from to do a little bit of data validation
+        Can probably drop sraadd_validate_form function later*/
+      errormessage := sraadd_validate_form (myfolderid);
+
+      IF errormessage <> ''
+      THEN
+         prompt := errormessage || '  Not moving folder!';
+         inbox := curboxnum ('New 5Ldg SRA ADD', myfolderid);
+      END IF;
+
+      -- send out email to admin
+      my_email_address := 'sdsurf_dm_bfr@sdsu.edu';
+      myfundcode := SUBSTR (myfolderid, 1, 6);
+
+      SELECT fundtitle
+        INTO myfundtitle
+        FROM nw_additional
+       WHERE fund = myfundcode;
+
+      my_email_body :=
+            'A BFR for '
+         || myfundcode
+         || ' - '
+         || myfundtitle
+         || ' has been received in the BFR5+ F&A inbox for processing.';
+      p_send_email ('sdsurf_dm_admin@sdsu.edu',
+                    my_email_address,
+                    'BFR5+ for Fund ' || myfundcode,
+                    my_email_body
+                   );
+      nw_audit.audit_wf_bfr5add (myfolderid,
+                                 inbox,
+                                 '0',
+                                 userid,
+                                 'New 5Ldg SRA ADD/SRAADDROUTE2BFR'
+                                );
+   END IF;
+END;
+/

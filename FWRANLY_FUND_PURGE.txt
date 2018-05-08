@@ -1,0 +1,79 @@
+CREATE OR REPLACE PROCEDURE NOLIJWEB."FWRANLY_FUND_PURGE"
+IS
+   v_loops   NUMBER (6) := 0;
+   v_start   VARCHAR2 (32);
+   v_end     VARCHAR2 (32);
+   v_date    VARCHAR2 (32);
+   g_dbname  VARCHAR2 (4) := dbinfo_pkg.f_get_dbname ();
+   v_prod_host  VARCHAR2(32) := 'sunset.foundation.sdsu.edu';  
+   crlf      VARCHAR2 (2) := CHR (10) || CHR (13); --Carriage Return and line feed
+
+   /*
+   Procedure for automatic purging of SRA Funds in NolijWeb using PURG_PKG date.
+   A 30 Day grace period is added to the calculated FUND purge date per Janet Harry
+   before inserting into Nolijweb purge table.
+
+   Ignacio Barragan
+   Version 1.0
+   */
+
+   CURSOR purge_funds
+   IS
+      (SELECT fwranly_fund_code
+         FROM FIMSMGR.fwranly
+        WHERE     UPPER (
+                     SDSUFOWN01.purg_pkg.get_purge_status (fwranly_fund_code)) =
+                     'APPROVED'
+              AND SDSUFOWN01.purg_pkg.get_purge_date (fwranly_fund_code) + 30 <
+                     SYSDATE
+       MINUS
+       SELECT fund_purge_fund FROM NOLIJWEB.nw_fund_purge);
+BEGIN
+
+IF g_dbname = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host
+   THEN 
+
+   v_date := TO_CHAR (SYSDATE, 'YYYY-MM-DD');
+   v_start := TO_CHAR (SYSDATE, 'HH24:MI:SS');
+
+   FOR fund IN purge_funds
+   LOOP
+      INSERT INTO NOLIJWEB.nw_fund_purge (fund_purge_fund,
+                                          fund_purge_date,
+                                          fund_purge_by,
+                                          fund_purge_rsn_code,
+                                          fund_purge_source)
+           VALUES (fund.fwranly_fund_code,
+                   SYSDATE,
+                   USER,
+                   '1',
+                   'FWRANLY');
+
+      v_loops := v_loops + 1;
+   END LOOP;
+
+   COMMIT;
+
+--Enable this segment to send email with count of funds added to purge
+ 
+   v_end := TO_CHAR (SYSDATE, 'HH24:MI:SS');
+
+   p_send_email (
+      'sdsurf_dm_admin@sdsu.edu',
+      'sdsurf_dm_sra@sdsu.edu',
+      'Funds added to NOLIJWEB.nw_fund_purge_fund table',
+         v_loops
+      || ' Funds have been added to NOLIJWEB.nw_fund_purge_fund table by nightly FWRANLY Purge Job'
+      || crlf
+      || crlf
+      || v_date
+      || '  '
+      || 'Start: '
+      || v_start
+      || '  End: '
+      || v_end);
+
+
+END IF;
+END;
+/

@@ -1,0 +1,288 @@
+CREATE OR REPLACE PROCEDURE NOLIJWEB."ROUTE2MANAGER" (
+   proposal_code   IN       VARCHAR2,
+   userid          IN       VARCHAR2,
+   inbox_out       OUT      NUMBER,
+   prompt          OUT      VARCHAR2
+   )
+IS
+   my_ntyp_code                VARCHAR2 (4);
+   my_inbox_number             NUMBER (4);
+   my_inbox_name               VARCHAR2 (20);
+   my_manager                  VARCHAR2 (20);
+   my_last_name                VARCHAR2 (60);
+   my_first_name               VARCHAR2 (15);
+   nw_ftvfund_count            NUMBER (1);
+   myfundcode                  VARCHAR2 (6);
+   myfundtitle                 VARCHAR2 (35);
+   nw_frvfund_count            NUMBER (1);
+   nw_fwbfndo_count            NUMBER (1);
+   nw_fundsupp_count           NUMBER (1);
+   no_fund_record              EXCEPTION;
+   wfma_code                   NUMBER (6);
+   my_prop_title               VARCHAR2 (256);
+   my_email_address            VARCHAR2 (90);
+   my_email_body               VARCHAR2 (800);
+   my_email_attr               VARCHAR2 (200);
+   crlf                        VARCHAR2 (2)            := CHR (10)
+                                                          || CHR (13);
+   frrgusn_ins                 NUMBER (6);
+   frrgusn_mbe                 NUMBER (6);
+   frrgusn_space_rent_fdn      NUMBER (6);
+   frrgusn_space_rent_nonfdn   NUMBER (6);
+   frrgusn_space               NUMBER (6);
+   frrgusn_stipends            NUMBER (6);
+   frrgusn_patents             NUMBER (6);
+   frrgusn_postdoc             NUMBER (6);
+   frrgusn_risk                NUMBER (6);
+   frrgusn_foreign             NUMBER (6);
+   my_grant_code               VARCHAR2 (9);
+   v_fundsupp_fund_code        NW_FUNDSUPP_TEMP.fundsupp_fund_code%TYPE;
+   v_fundsupp_prop_code        NW_FUNDSUPP_TEMP.fundsupp_prop_code%TYPE;
+   v_db_name                   gubinst.gubinst_instance_name%TYPE;
+   v_prod_host 		           VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+   fundsupp_message_exists     BOOLEAN;
+   fundsupp_postsave_exists    BOOLEAN;
+   fundsupp_exists             BOOLEAN;
+   ret1                        VARCHAR2 (15)                      := CHR (13);
+   ret2                        VARCHAR2 (15)           := CHR (13)
+                                                          || CHR (13);
+   ret3                        VARCHAR2 (15)
+                                            := CHR (13) || CHR (13)
+                                               || CHR (13);
+                                               
+   e_already_routed exception; 
+                                                 
+BEGIN
+
+ --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+   --
+   -- determine the current inbox of the folder
+   --
+   my_inbox_number := Curboxnum ('New 5Ldg SRA', proposal_code);
+   /*check to to see if need to process as Supplemental
+     existence of a fundsupp record flags this procedure to route as supplemental*/
+   Nw_Record_Check.nw_fundsupp_exists (proposal_code, NULL, fundsupp_exists);
+   IF fundsupp_exists
+   THEN
+      Nw_Record_Check.nw_fundsupp_message_exists (proposal_code,
+                                                  NULL,
+                                                  fundsupp_message_exists
+                                                 );
+      /*give error messaage if only the fundsupp record message record exists
+      this means the user only clicked save once on the BFR5 from
+      2 saves are needed... 1 gives warning, 2nd confirms ready for routing*/
+
+--NOLIJ6      
+--      IF fundsupp_message_exists
+--      THEN
+--         prompt :=
+--               'ERROR:  --NOT ROUTED--  Supplemental record not complete.'
+--            || ret2
+--            || 'Please click "SAVE" first then click "Route" again.';
+--         inbox_out := -1;
+--      ELSE
+--         /*check if second save has been done on BFR5 form*/
+--         Nw_Record_Check.nw_fundsupp_postsave_exists
+--                                                    (proposal_code,
+--                                                     NULL,
+--                                                     fundsupp_postsave_exists
+--                                                    );
+--         /*IF we have correct POSTSAVE record. we can continue processing supplemental*/
+--         IF fundsupp_postsave_exists
+--         THEN
+--NOLIJ6
+            /*Get supplemental info*/
+            SELECT fundsupp_fund_code, fundsupp_prop_code
+              INTO v_fundsupp_fund_code, v_fundsupp_prop_code
+              FROM NW_FUNDSUPP_TEMP
+             WHERE fundsupp_prop_code = proposal_code;
+            /*Set variables so that Nolijweb routes to completed box*/
+            inbox_out := -1;
+            --   Boxnum ('New 5Ldg SRA', 'Completed and routed to F&A WorkFlow');
+              --NULL;
+            DELETE FROM KW_WFCURRENT WHERE WFCURRENT_FOLDER_ID = proposal_code;
+            /*Set variables so user notified what folder images were moved to*/
+            prompt := 'Routing to Fund folder ' || v_fundsupp_fund_code;
+            /*Move Images to Fund Folder specifed on the POSTSAVE save of the user
+              If they change fund number after second save but before route, it will route
+              to fund indicated on POSTSTAVE*/
+            UPDATE KW_WFDOCS
+               SET wfdocs_folder_id = v_fundsupp_fund_code || '|PRIME|0000'
+             WHERE wfdocs_folder_id = proposal_code;
+            /*Mark temp as completed.  probably want to write this action to some other table later*/
+            --UPDATE NW_FUNDSUPP_TEMP
+              -- SET fundsupp_step = 'COMPLETED'
+
+--NOLIJ6    
+             DELETE FROM NW_FUNDSUPP_TEMP  --Modified 1/10/2007 to allow Proposal recycling
+              WHERE fundsupp_fund_code = v_fundsupp_fund_code
+               AND fundsupp_prop_code = v_fundsupp_prop_code
+               AND fundsupp_step = 'NOLIJ6';
+--               AND fundsupp_step = 'POST-SAVE/PRE-ROUTE';
+--NOLIJ6 
+
+
+              
+            /*audit.  need to redo this later*/
+            Nw_Audit.audit_wf (proposal_code,
+            --                   Boxnum ('New 5Ldg SRA',
+            --                           'Completed and routed to F&A WorkFlow'
+            --                          ),
+                               '208',
+                               v_fundsupp_fund_code,
+                               userid,
+                               'New 5Ldg SRA/SUPPLEMENTAL'
+                              );
+            /*email peeps.  need to redo this later*/
+            my_email_body :=
+                  'A Supplemental for Fund '
+               || v_fundsupp_fund_code
+               || ' has been processed by User:'||userid||' from Proposal '
+               || v_fundsupp_prop_code
+               || crlf
+               || 'Please review the file or contact the Administrator if you have any questions';
+
+    IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+           Nw_Bfrmods.get_fna_adm_addr(v_fundsupp_fund_code, my_email_address);--(my_fund_code IN, my_email_address OUT)
+    ELSE
+    my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+    END IF;
+
+            p_send_email ('sdsurf_dm_admin@sdsu.edu',
+                          my_email_address,
+                             'Supplemental for Fund '
+                          || v_fundsupp_fund_code
+                          || '.  Proposal: '
+                          || v_fundsupp_prop_code,
+                          my_email_body
+                          ||ret2
+                          || 'Financial Admin Email Address: ' || my_email_address
+                         );
+                         /*p_send_email ('nolij@foundation.sdsu.edu',
+                          'Financial.Reporting@foundation.sdsu.edu',
+                             'FinRep - Supplemental for Fund '
+                          || v_fundsupp_fund_code
+                          || '.  Proposal: '
+                          || v_fundsupp_prop_code,
+                          my_email_body
+                         );*/
+--NOLIJ6
+--         ELSE
+--               /*We are here because a fundsupp exists, but its not the message or the postsave
+--              most likely its the completed record.  We can only get to this ELSE
+--              if the user queries a proposal that has a completed Supplement
+--              and pushes route for some reason.
+--              Give this error message because user is just going buck wild */
+--            prompt :=
+--                  'ERROR:  --NOT ROUTED--  Supplemental record error.'
+--               || ret2
+--               || 'Postsave Record Does Not Exist.  Please contact Computing Services.';
+--            inbox_out := my_inbox_number;
+--         END IF;
+--      END IF;
+--NOLIJ6
+
+   /*WE are in this ELSE becuase this needs to be routed as normal BFR5 and does not need supplement routing*/
+   ELSE
+      -- select wfcurrent_wfde_code, wfcurrent_wfma_code into my_inbox_number, wfma_code from kw_wfcurrent where wfcurrent_folder_id=proposal_code;
+      -- determine the inbox name of this inbox code from the kw_wfdeval table
+      SELECT SUBSTR (wfdeval_wfde_name, 1, 6)
+        INTO my_inbox_name
+        FROM KW_WFDEVAL
+       WHERE wfdeval_wfde_code = my_inbox_number;
+       
+    --NOLIJ 6
+    --this avoids a 500 error is the user clicks route twice
+     IF (my_inbox_name = 'Comple') THEN
+      raise e_already_routed;
+     END IF;
+     --NOLIJ 6
+       
+      -- determine the NTYP_CODE of the inbox_name from SPRIDEN
+      SELECT spriden_ntyp_code
+        INTO my_ntyp_code
+        FROM spriden
+       WHERE spriden_id = my_inbox_name AND spriden_change_ind IS NULL;
+      -- determine the manager of the NTYP_CODE from the MODULE_MANAGERS table
+      SELECT manager
+        INTO my_manager
+        FROM MODULE_MANAGERS
+       WHERE module_name = my_ntyp_code;
+      -- check to see that proposal_code has a record in all three temp tables:
+      -- nw_ftvfund_temp, nw_fwbfndo_temp, nw_frvfund_temp
+      SELECT COUNT (*)
+        INTO nw_ftvfund_count
+        FROM NW_FTVFUND_TEMP
+       WHERE nolijweb_folder_id = proposal_code;
+      SELECT COUNT (*)
+        INTO nw_frvfund_count
+        FROM NW_FRVFUND_TEMP
+       WHERE frvfund_folder_id = proposal_code;
+      SELECT COUNT (*)
+        INTO nw_fwbfndo_count
+        FROM NW_FWBFNDO_TEMP
+       WHERE fwbfndo_folder_id = proposal_code;
+      IF    (nw_ftvfund_count = 0)
+         OR (nw_frvfund_count = 0)
+         OR (nw_fwbfndo_count = 0)
+      THEN
+         RAISE no_fund_record;
+      END IF;
+      SELECT ftvfund_fund_code
+        INTO myfundcode
+        FROM NW_FTVFUND_TEMP
+       WHERE nolijweb_folder_id = proposal_code;
+      SELECT ftvfund_title
+        INTO myfundtitle
+        FROM NW_FTVFUND_TEMP
+       WHERE nolijweb_folder_id = proposal_code;
+      inbox_out :=
+         Move2wf ('New 5Ldg SRA',
+                  'New 5Ldg F&A',
+                  'BFR Inbox',
+                  proposal_code,
+                  userid
+                 );
+      prompt := 'Routing to:BFR Inbox';
+-- send out email to admin
+     IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN my_email_address := 'sdsurf_dm_BFR@sdsu.edu';
+     ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+     END IF;
+     
+      SELECT frbprop_long_title
+        INTO my_prop_title
+        FROM frbprop
+       WHERE frbprop_code = proposal_code;
+      my_email_body :=
+            'A BFR for '
+         || myfundcode
+         || ' - '
+         || myfundtitle
+         || ' has been received in the F&A 5 Ldgr New Award BFR Wkflow inbox for processing.';
+      p_send_email ('sdsurf_dm_admin@sdsu.edu',
+                    my_email_address,
+                       'BFR for Fund '
+                    || myfundcode
+                    || '.  Proposal: '
+                    || proposal_code,
+                    my_email_body
+                   );
+   END IF;
+EXCEPTION
+   WHEN no_fund_record
+   THEN
+      prompt :=
+         'Error Folder Cannot Be Routed because there is no Fund Record. BE SURE to hit Save after data entry.';
+      inbox_out := my_inbox_number;
+      --NOLIJ6
+      inbox_out := -1;
+      --NOLIJ6
+      
+   WHEN e_already_routed
+   THEN
+    prompt := 'You''ve already routed this. Thanks!';
+    inbox_out := -1;
+END;
+/

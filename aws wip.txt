@@ -1,0 +1,29 @@
+v_prod_host 		           VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+
+IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+
+
+
+DECLARE
+prod_host VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+
+begin
+
+IF UTL_INADDR.get_host_name = prod_host THEN
+p_send_email ('sdsurf_dm_admin@sdsu.edu',
+                       'ibarragan@sdsu.edu',
+                       '29CBFR for Fund ',
+                       'prod host matches: '||prod_host||' get host name is: '|| UTL_INADDR.get_host_name
+                      );
+                      
+                      ELSE 
+                      
+ p_send_email ('sdsurf_dm_admin@sdsu.edu',
+                       'ibarragan@sdsu.edu',
+                       '29CBFR for Fund ',
+                       'prod host no match: '||prod_host||' get host name is: '|| UTL_INADDR.get_host_name
+                      );
+                      
+END IF;                     
+
+end;

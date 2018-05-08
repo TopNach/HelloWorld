@@ -1,0 +1,172 @@
+CREATE OR REPLACE PROCEDURE NOLIJWEB."ROUTE2APA" (folderid   IN     VARCHAR2,
+                                                  userid     IN     VARCHAR2,
+                                                  inbox         OUT NUMBER,
+                                                  prompt        OUT VARCHAR2)
+IS
+   APA_CODE                   VARCHAR2 (10);
+   start_inbox_number         NUMBER (6);
+   route_inbox_number         NUMBER (6);
+   my_inbox_name              VARCHAR2 (6);
+   specialist_email_address   VARCHAR2 (90);
+   apa_email_address          VARCHAR2 (90);
+   specialist_pidm            NUMBER (8);
+   apa_pidm                   NUMBER (8);
+   my_email_body              VARCHAR2 (1000);
+   last_name                  VARCHAR2 (60);
+   first_name                 VARCHAR2 (60);
+   pi_last_name               VARCHAR2 (60);
+   pi_first_name              VARCHAR2 (60);
+   my_prop_title              VARCHAR2 (256);
+   my_email_subject           VARCHAR2 (1000);
+   v_db_name                  gubinst.gubinst_instance_name%TYPE;
+   v_prod_host 		          VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+   
+BEGIN
+
+ --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+      
+   -- determine the frrprpi pidm for email generation
+   SELECT frrprpi_id_pidm
+     INTO specialist_pidm
+     FROM frrprpi
+    WHERE frrprpi_id_ind = 'PSS' AND frrprpi_prop_code = folderid;
+
+   -- determine the email address for the pidm obtained above
+   IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+        SELECT GOREMAL_EMAIL_ADDRESS
+        INTO specialist_email_address
+        FROM goremal
+        WHERE GOREMAL_PIDM = specialist_pidm;
+   ELSE specialist_email_address := 'sdsurf_dm_admin@sdsu.edu';
+   END IF;
+
+   -- determine the frrprpi pidm for email generation
+   SELECT frrprpi_id_pidm
+     INTO apa_pidm
+     FROM frrprpi
+    WHERE frrprpi_id_ind = 'PPA' AND frrprpi_prop_code = folderid;
+
+   -- determine the email address for the pidm obtained above
+    IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+        SELECT GOREMAL_EMAIL_ADDRESS
+        INTO apa_email_address
+        FROM goremal
+        WHERE GOREMAL_PIDM = apa_pidm;
+    ELSE apa_email_address := 'sdsurf_dm_admin@sdsu.edu';
+    END IF;
+    
+
+   --Get current box number
+   start_inbox_number := curboxnum ('New 5Ldg SRD', folderid);
+
+   -- determine APA Code for the current Inbox
+   SELECT spriden_id, spriden_last_name, spriden_first_name
+     INTO APA_CODE, last_name, first_name
+     FROM spriden
+    WHERE spriden_pidm =
+             (SELECT frrprpi_id_pidm
+                FROM frrprpi
+               WHERE frrprpi_prop_code = folderid AND frrprpi_id_ind = 'PPA')
+          AND spriden_change_ind IS NULL;
+
+   -- extract from kw_wfdeval the inbox number for the given ADM code.
+   -- Note that the inbox Name MUST start with ADMxxx - <name>
+   prompt :=
+         'File has been Routed to APA '
+      || APA_CODE
+      || ' '
+      || first_name
+      || ' '
+      || last_name
+      || ' for Processing'
+      || USER;
+
+   -- determine PI Name
+   SELECT spriden_last_name, spriden_first_name
+     INTO pi_last_name, pi_first_name
+     FROM spriden
+    WHERE spriden_pidm =
+             (SELECT frrprpi_id_pidm
+                FROM frrprpi
+               WHERE frrprpi_prop_code = folderid AND frrprpi_id_ind = '001')
+          AND spriden_change_ind IS NULL;
+
+   inbox := boxnum ('New 5Ldg SRD', APA_CODE);
+
+   --select wfdeval_wfde_code into route_inbox_number from kw_wfdeval where wfdeval_wfma_code = 23
+   -- and wfdeval_level=2 and substr(wfdeval_wfde_name,1,6) = APA_CODE;
+
+   SELECT frbprop_long_title
+     INTO my_prop_title
+     FROM frbprop
+    WHERE frbprop_code = folderid;
+
+   my_email_body :=
+         'A new award has been received for proposal: '
+      || folderid
+      || ' "'
+      || my_prop_title
+      || '" and the file is in your Nolij SRD APA 5Ldgr New Award BFR Wkflow inbox ready for processing';
+   my_email_subject :=
+      'New Award for ' || pi_first_name || ' ' || pi_last_name;
+
+   p_send_email ('sdsurf_dm_admin@sdsu.edu',
+                 apa_email_address,
+                 'New Award for ' || pi_first_name || ' ' || pi_last_name,
+                 my_email_body);
+                                 
+   my_email_body := NULL;
+   my_email_body :=
+         'A new award has been received for proposal: '
+      || folderid
+      || ' "'
+      || my_prop_title
+      || '" and has been routed to '
+      || first_name
+      || ' '
+      || last_name
+      || ' for processing.  You can view this file by logging into Nolij with the (Proposal Files) role';
+   p_send_email (
+      'sdsurf_dm_admin@sdsu.edu',
+      specialist_email_address,
+         'New Award for '
+      || pi_first_name
+      || ' '
+      || pi_last_name
+      || ' routed to APA for processing',
+      my_email_body);
+
+   nw_audit.audit_wf (folderid,
+                      inbox,
+                      '0',
+                      userid,
+                      'New 5Ldg SRD/ROUTE2APA');
+
+   INSERT INTO temp
+        VALUES (apa_code || ' - ' || inbox);
+--Delete the uploaded to Banner Workflow marker if it exists
+--it exists because this proposal may have been routed through this workflow before
+--the other 2 completed inboxes were deleted at the end of the workflow
+/*MAYBE USE LATER IN ORDER TO ROUTE A PROPOSAL FOLDER MORE THAN ONCE
+delete from kw_wfcurrent
+   where wfcurrent_folder_id = folderid
+   and wfcurrent_wfde_code =  boxnum('New 5Ldg F&A','Uploaded into Banner');
+*/
+EXCEPTION
+   WHEN NO_DATA_FOUND
+   THEN
+      prompt :=
+         'Error: Trying to route to personnel that is not yet defined in Banner.';
+      inbox := start_inbox_number;
+END;
+
+----------------------------------------------------------------------
+--END: ROUTE2APA
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+--START: route2sra
+----------------------------------------------------------------------
+/

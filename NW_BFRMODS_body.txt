@@ -1,0 +1,778 @@
+CREATE OR REPLACE PACKAGE BODY NOLIJWEB."NW_BFRMODS" 
+AS
+  PROCEDURE email_a0xprop(folder_id IN VARCHAR2, doctype_code IN VARCHAR2) IS
+     my_proposal_code VARCHAR2(9) := NULL;
+     my_prop_title frbprop.frbprop_long_title%TYPE := NULL;
+     my_prop_agency spriden.spriden_last_name%TYPE := NULL;
+     my_doctype_name KW_WFDTVAL.wfdtval_wfdt_name%TYPE := NULL;
+     my_email_address VARCHAR2(90) := NULL;
+     my_email_subject VARCHAR2(256) := NULL;
+     my_sdat_code_attr VARCHAR2(64) := NULL;
+     my_email_body VARCHAR2(1000) := NULL;
+     frr_ins NUMBER(1) := NULL;
+     frr_mbe NUMBER(1) := NULL;
+     frr_atrisk NUMBER(1) := NULL;
+     frr_patents NUMBER(1) := NULL;
+     frr_foreign NUMBER(1) := NULL;
+     frr_postdoc NUMBER(1) := NULL;
+     frr_space NUMBER(1) := NULL;
+     frr_space_fdn NUMBER(1) := NULL;
+     frr_space_nonfdn NUMBER(1) := NULL;
+     frr_stipends NUMBER(1) := NULL;
+     frr_hiring NUMBER(1) := NULL;
+--     frr_e_verify NUMBER(1) := NULL;  ---- Ended per Mary Manesis 10/14/2010
+     frr_trafficking NUMBER(1);
+     v_attr_sent_list VARCHAR2(1024);
+     crlf VARCHAR2 (2) := CHR (10)
+                                   || CHR (13); --Carriage Return and line feed
+                                   
+    v_db_name            gubinst.gubinst_instance_name%TYPE;
+    v_prod_host 		 VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+    
+ BEGIN
+ 
+ --Get Database name
+    SELECT gubinst_instance_name INTO v_db_name 
+      FROM gubinst;
+      
+  --Determine if Folder ID is Proposal (Sxxxxxxxx).
+  IF SUBSTR(folder_id,1,1) = 'S' THEN
+     --Get proposal code
+     my_proposal_code := folder_id;--Get proposal title for subject line
+
+     SELECT SUBSTR( frbprop_long_title,1,128) INTO my_prop_title
+            FROM frbprop
+            WHERE frbprop_code = my_proposal_code;
+
+     my_prop_agency := nw_bfrmods.get_agency_from_proposal(my_proposal_code);
+
+     --Check for fraprop user defined attributes
+     SELECT COUNT(*) INTO frr_ins FROM frrpusn
+      WHERE frrpusn_sdat_code_attr = 'INSURANCE ISSUES' AND
+      frrpusn_prop_code = my_proposal_code;
+     SELECT COUNT(*) INTO frr_mbe FROM frrpusn
+      WHERE frrpusn_sdat_code_attr = 'MBE/WBE' AND
+      frrpusn_prop_code = my_proposal_code;
+     SELECT COUNT(*) INTO frr_atrisk FROM frrpusn
+      WHERE frrpusn_sdat_code_attr = 'AT RISK ACTIVITIES' AND
+      frrpusn_prop_code = my_proposal_code;
+     SELECT COUNT(*) INTO frr_patents  FROM frrpusn
+      WHERE frrpusn_sdat_code_attr = 'PATENTS/INTELLECTUAL PROPERTY' AND
+      frrpusn_prop_code = my_proposal_code;
+     SELECT COUNT(*) INTO frr_foreign FROM frrpusn
+      WHERE frrpusn_sdat_code_attr = 'FOREIGN PROJECTS' AND
+      frrpusn_prop_code = my_proposal_code;
+     SELECT COUNT(*) INTO frr_postdoc FROM frrpusn
+      WHERE frrpusn_sdat_code_attr = 'POSTDOC FELLOW/TRAIN' AND
+      frrpusn_prop_code = my_proposal_code;
+     SELECT COUNT(*) INTO frr_space FROM frrpusn
+      WHERE frrpusn_sdat_code_attr = 'SPACE' AND
+      frrpusn_prop_code = my_proposal_code;
+     SELECT COUNT(*) INTO frr_space_fdn  FROM frrpusn
+      WHERE frrpusn_sdat_code_attr = 'SPACE RENT FDN' AND
+      frrpusn_prop_code = my_proposal_code;
+     SELECT COUNT(*) INTO frr_space_nonfdn  FROM frrpusn
+      WHERE frrpusn_sdat_code_attr = 'SPACE RENT NON FDN' AND
+      frrpusn_prop_code = my_proposal_code;
+     SELECT COUNT(*) INTO frr_stipends  FROM frrpusn
+      WHERE frrpusn_sdat_code_attr = 'STIPENDS' AND
+      frrpusn_prop_code = my_proposal_code;
+     SELECT COUNT(*) INTO frr_hiring  FROM frrpusn
+      WHERE frrpusn_sdat_code_attr = 'HIRING RESTRICTIONS' AND
+      frrpusn_prop_code = my_proposal_code;
+
+---- Ended per Mary Manesis 10/14/2010
+--     SELECT COUNT(*) INTO frr_e_verify  FROM frrpusn
+--      WHERE frrpusn_sdat_code_attr = 'E-VERIFY' AND
+--      frrpusn_prop_code = my_proposal_code;
+
+     SELECT COUNT(*) INTO frr_trafficking  FROM frrpusn
+      WHERE frrpusn_sdat_code_attr = 'TRAFFICKING' AND
+      frrpusn_prop_code = my_proposal_code;
+     SELECT wfdtval_wfdt_name INTO my_doctype_name FROM KW_WFDTVAL
+      WHERE wfdtval_wfdt_code = doctype_code;
+     --Handling of A0x Award Doctype in Nolij Proposal folder
+             -- Build email body for Proposal-based messages
+             my_email_body := 'An ['||my_doctype_name||'] Doctype was received for:'
+            || crlf ||
+            'PROPOSAL - '||my_proposal_code
+            ||crlf||
+            'TITLE - '||my_prop_title
+            ||crlf||
+            'AGENCY - '||my_prop_agency
+            || crlf ||
+            'Please review the document(s) in NolijWeb "Award Files" role "Proposal" query.';
+         IF frr_ins > 0 THEN
+                IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host AND UTL_INADDR.get_host_name = v_prod_host 
+                    THEN my_email_address := 'sdsurf_dm_insurance@sdsu.edu';
+                    ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+                END IF;
+                
+                my_sdat_code_attr := 'INSURANCE ISSUES';
+            my_email_subject := my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_prop_title;
+            v_attr_sent_list := '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+            --Send email
+            p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+         END IF;
+         
+         IF frr_mbe > 0 THEN
+                IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host 
+                    THEN my_email_address := 'sdsurf_dm_mbewme@sdsu.edu';
+                    ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+                END IF;
+                my_sdat_code_attr := 'MBE/WBE';
+            my_email_subject := my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_prop_title;
+            v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+            --Send email
+            p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+         END IF;
+         
+         IF frr_atrisk > 0 THEN
+                IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host 
+                    THEN my_email_address := 'sdsurf_dm_atrisk@sdsu.edu';
+                    ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+                END IF;
+                my_sdat_code_attr := 'AT RISK ACTIVITIES';
+            my_email_subject := my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_prop_title;
+            v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+            --Send email
+            p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+         END IF;
+         
+         IF frr_patents > 0 THEN
+                IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host 
+                    THEN my_email_address := 'sdsurf_dm_patents@sdsu.edu';
+                    ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+                END IF;
+                my_sdat_code_attr := 'PATENTS/INTELLECTUAL PROPERTY';
+            my_email_subject := my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_prop_title;
+            v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+            --Send email
+            p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+            END IF;
+            
+         IF frr_hiring > 0 THEN
+                IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host 
+                    THEN my_email_address := 'sdsurf_dm_hiring@sdsu.edu';
+                    ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+                END IF;
+                my_sdat_code_attr := 'HIRING RESTRICTIONS';
+            my_email_subject := my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_prop_title;
+            v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+            --Send email
+            p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+         END IF;
+         
+
+---- Ended per Mary Manesis 10/14/2010
+--         IF frr_e_verify > 0 THEN
+--                IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host 
+--                    THEN my_email_address := 'nw_everify@foundation.sdsu.edu';
+--                    ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+--                END IF;
+--                my_sdat_code_attr := 'E-VERIFY';
+--            my_email_subject := my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_prop_title;
+--            v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+--            --Send email
+--            p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+--         END IF;
+         
+         IF frr_trafficking > 0 THEN
+                IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host 
+                    THEN my_email_address := 'sdsurf_dm_trafficking@sdsu.edu';
+                    ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+                END IF;
+                my_sdat_code_attr := 'TRAFFICKING';
+            my_email_subject := my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_prop_title;
+            v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+            --Send email
+            p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+         END IF;
+         
+         IF v_attr_sent_list IS NULL THEN
+             v_attr_sent_list := crlf||crlf||'FRAPROP USER Defined Attribute (UDA) Messages Sent:'
+            ||crlf||
+            '* NOTE - No UDA messages were sent!';
+             ELSE
+            v_attr_sent_list := crlf||crlf||'FRAPROP USER Defined Attribute (UDA) Messages Sent:'
+            ||crlf||
+            v_attr_sent_list;
+         END IF;
+         /**
+         --Code below will email a list of user defined attr. messages sent.
+         --This is here in case, it is requested in the future.
+         my_email_subject := ''||my_doctype_name||' - Received FOR PROPOSAL: '|| my_proposal_code;
+         p_send_email('sdsurf_dm_admin@sdsu.edu', 'ibarragan@foundation.sdsu.edu', 'SRD_Adm - '||my_email_subject, my_email_body|| crlf ||v_attr_sent_list);
+         **/
+     END IF;
+ END email_a0xprop;
+ PROCEDURE Email_A0xaward(folder_id IN VARCHAR2, doctype_code IN VARCHAR2) IS
+     my_fund_code VARCHAR2(6) := NULL;
+     my_fundsub_code KW_WFDOCS.wfdocs_folder_id%TYPE := NULL;
+     my_fund_title VARCHAR2(256) := NULL;
+     my_doctype_name KW_WFDTVAL.wfdtval_wfdt_name%TYPE := NULL;
+     my_email_address VARCHAR2(90) := NULL;
+     my_finrep_email_addr VARCHAR2(90) := NULL;
+     my_finarra_email_addr VARCHAR2(90) := NULL;
+     my_email_subject VARCHAR2(256) := NULL;
+     my_sdat_code_attr VARCHAR2(64) := NULL;
+     my_sdat_arra_attr VARCHAR2(64) := NULL;
+     my_agency_name VARCHAR2(60) := NULL;
+     my_email_body VARCHAR2(1000) := NULL;    
+     title_count NUMBER(1) := NULL;
+     ivc_count NUMBER(4) := NULL;
+     arra_tag VARCHAR2(8) := NULL;
+     awarded_fund_count NUMBER(1) := 0;
+     v_attr_sent_list VARCHAR2(2048);
+     v_db_name gubinst.gubinst_instance_name%TYPE;
+     v_prod_host VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+
+     crlf VARCHAR2(2) := CHR (10)
+                                   || CHR (13); --Carriage Return and line feed
+                                   
+     CURSOR get_apa_address IS
+       SELECT DISTINCT goremal_email_address email_address
+         FROM goremal, frrprpi, fwbgrpr, ftvfund
+         WHERE frrprpi_id_pidm = goremal_pidm
+         AND goremal_preferred_ind = 'Y'
+         AND frrprpi_id_ind = 'PPA'
+         AND frrprpi_prop_code = fwbgrpr_prop_code
+         AND fwbgrpr_grant_code = ftvfund_grnt_code
+         AND ftvfund_nchg_date > SYSDATE
+         AND ftvfund_fund_code = my_fund_code;
+
+ --PROCESS FUND        
+ BEGIN
+ 
+   my_fund_code := SUBSTR(folder_id,1,6); --Folder ID is FUND (XXXXXX|PRIME|0000)
+ 
+   IF doctype_code = '120' OR folder_id LIKE '%|SUB|%' THEN
+      my_fundsub_code := folder_id;
+      ELSE my_fundsub_code := my_fund_code;
+   END IF;
+ 
+ --Get Database name
+   SELECT gubinst_instance_name INTO v_db_name FROM gubinst;
+      
+   SELECT COUNT(*) INTO ivc_count FROM nw_ivc_fund WHERE my_fund_code = ivc_fund;
+ 
+   IF SUBSTR(folder_id,1,1) != 'S' AND ivc_count = 0 THEN
+    --Get Fund title
+      SELECT COUNT(*) INTO title_count FROM ftvfund
+       WHERE ftvfund_fund_code = my_fund_code
+         AND ftvfund_nchg_date > SYSDATE;
+
+      IF title_count > 0 THEN
+         SELECT SUBSTR(ftvfund_title,1,128) INTO my_fund_title FROM ftvfund
+          WHERE ftvfund_fund_code = my_fund_code
+            AND ftvfund_nchg_date > SYSDATE
+            AND ROWNUM=1; --Added Rownum to deal with slew of improperly future dated records.  
+                          --Added ROWNUM=1 to prevent from blowing up when multiple titles retured. IB
+      ELSE
+         my_fund_title := 'Fund ' || my_fund_code;
+      END IF;
+
+      my_agency_name := nw_bfrmods.get_agency_from_fund(my_fund_code);
+    
+      IF nw_bfrmods.sdat_fund_check (my_fund_code,'ARRA FUNDING APP') 
+       THEN arra_tag := '(ARRA) ';
+      END IF;
+     
+      SELECT wfdtval_wfdt_name INTO my_doctype_name FROM KW_WFDTVAL
+       WHERE wfdtval_wfdt_code = doctype_code;
+
+      SELECT COUNT(*) INTO awarded_fund_count FROM ftvfund
+       WHERE ftvfund_fund_code = my_fund_code
+         AND ftvfund_nchg_date > SYSDATE;
+
+      --Handling of A0x Award Doctype in Nolij Fund folder
+
+             -- Build email body for Fund-based messages
+             my_email_body := 'An ['||my_doctype_name||'] Doctype was received for:'
+            ||crlf||
+            arra_tag||'FUND - ' || my_fundsub_code
+            || crlf ||
+            'TITLE - '||my_fund_title
+            || crlf ||
+            'AGENCY - '||my_agency_name
+            ||crlf||
+            'Please review the document(s) in NolijWeb "Award Files" role - "Fund" query.';
+            
+      --Begin ARRA HR Messaging
+      IF doctype_code IN ('73','74')
+      
+         AND nw_bfrmods.sdat_fund_check (my_fund_code,'ARRA FUNDING APP')
+          OR nw_bfrmods.sdat_fund_check (my_fund_code,'ARRA PROPOSED')
+          OR nw_bfrmods.sdat_fund_check (my_fund_code,'ARRA FUNDED')
+         AND NOT nw_bfrmods.sdat_fund_check (my_fund_code,'ARRA EQUIPMENT GRANTS') THEN
+         
+             my_sdat_arra_attr := 'ARRA AWARD';
+             my_email_address := nw_bfrmods.sdat_email (my_sdat_arra_attr);
+             my_email_subject := my_doctype_name|| ' - '|| my_sdat_arra_attr ||' - ' || 'Fund: ' || my_fund_code;
+             v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_arra_attr ||'(' ||my_email_address ||') '|| crlf;
+             --Send email
+             p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+      END IF;
+
+    --Begin All other Messaging
+      IF doctype_code IN ('73','74','78', '79', '80', '132') THEN
+      
+          IF nw_bfrmods.sdat_fund_check (my_fund_code,'INSURANCE ISSUES') THEN
+                my_sdat_code_attr := 'INSURANCE ISSUES';
+                my_email_address := nw_bfrmods.sdat_email (my_sdat_code_attr);
+                my_email_subject := arra_tag||my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_fund_title;
+                v_attr_sent_list := '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+                --Send email
+                p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+          END IF;
+         
+          IF nw_bfrmods.sdat_fund_check (my_fund_code,'MBE/WBE') THEN
+                my_sdat_code_attr := 'MBE/WBE';
+                my_email_address := nw_bfrmods.sdat_email (my_sdat_code_attr);
+                my_email_subject := arra_tag||my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_fund_title;
+                v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+                --Send email
+                p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+          END IF;
+         
+          IF nw_bfrmods.sdat_fund_check (my_fund_code,'AT RISK ACTIVITIES') THEN
+                my_sdat_code_attr := 'AT RISK ACTIVITIES';
+                my_email_address := nw_bfrmods.sdat_email (my_sdat_code_attr);
+                my_email_subject := arra_tag||my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_fund_title;
+                v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+                --Send email
+                p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+          END IF;
+         
+          IF nw_bfrmods.sdat_fund_check (my_fund_code,'PATENTS/INTELLECTUAL PROPERTY') THEN
+                my_sdat_code_attr := 'PATENTS/INTELLECTUAL PROPERTY';
+                my_email_address := nw_bfrmods.sdat_email (my_sdat_code_attr);
+                my_email_subject := arra_tag||my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_fund_title;
+                v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+                --Send email
+                p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+          END IF;
+         
+          IF nw_bfrmods.sdat_fund_check (my_fund_code,'HIRING RESTRICTIONS') AND doctype_code IN ('74','132') THEN
+                my_sdat_code_attr := 'HIRING RESTRICTIONS';
+                my_email_address := nw_bfrmods.sdat_email (my_sdat_code_attr);
+                my_email_subject := arra_tag||my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_fund_title;
+                v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+                --Send email
+                p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+          END IF;
+
+---- Ended per Mary Manesis 10/14/2010         
+--          IF nw_bfrmods.sdat_fund_check (my_fund_code,'E-VERIFY') AND doctype_code = '80' THEN
+--                my_sdat_code_attr := 'E-VERIFY';
+--                my_email_address := nw_bfrmods.sdat_email (my_sdat_code_attr);
+--                my_email_subject := arra_tag||my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_fund_title;
+--                v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+--                --Send email
+--                p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+--          END IF;
+          
+          IF nw_bfrmods.sdat_fund_check (my_fund_code,'TRAFFICKING') AND doctype_code = '80' THEN
+                my_sdat_code_attr := 'TRAFFICKING';
+                my_email_address := nw_bfrmods.sdat_email (my_sdat_code_attr);
+                my_email_subject := arra_tag||my_doctype_name|| ' - '|| my_sdat_code_attr ||' - ' || my_fund_title;
+                v_attr_sent_list := v_attr_sent_list|| '* '||my_sdat_code_attr ||'(' ||my_email_address ||') '|| crlf;
+                --Send email
+                p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body);
+          END IF;
+         
+         --Begin Compliance Messaging
+         
+          IF doctype_code IN ('73','74','132') 
+           AND nw_bfrmods.sdat_fund_check (my_fund_code,'INTERNATIONAL SPONSORS') 
+            OR nw_bfrmods.sdat_fund_check (my_fund_code,'INTERNATIONAL ACTIVITY')
+            OR nw_bfrmods.sdat_fund_check (my_fund_code,'SUBCONTRACTS ANTICIPATED')
+            OR nw_bfrmods.sdat_fund_check (my_fund_code,'SUBCONTRACTS BUDGETED')
+            OR nw_bfrmods.sdat_fund_check (my_fund_code,'COST SHARING') THEN
+            
+                nw_bfr_emails.compliance(NULL,doctype_code,NULL,my_fund_code,arra_tag);     
+          
+          END IF;
+     
+      END IF;
+         
+         --Begin Messages to Admins
+      IF doctype_code IN ('73','74','78', '79', '80', '120', '132') THEN
+          
+         IF v_attr_sent_list IS NULL THEN
+             v_attr_sent_list := crlf||crlf||'FRAGRNT User Defined Attribute (UDA) Messages Sent:'
+            ||crlf||
+            '* NOTE - No UDA messages were sent!';
+             ELSE
+            v_attr_sent_list := crlf||crlf||'FRAGRNT User Defined Attribute (UDA) Messages Sent:'
+            ||crlf||
+            v_attr_sent_list;
+         END IF;
+                   
+         my_email_subject := ''||my_doctype_name||' - Received for '||arra_tag||'Fund: '|| my_fundsub_code;
+
+         IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host 
+                    THEN Nw_Bfrmods.get_fna_adm_addr(my_fund_code, my_email_address);
+                         my_finrep_email_addr := 'sdsurffreporting@foundation.sdsu.edu'; --(my_fund_code IN, my_email_address OUT)
+                         my_finarra_email_addr := 'sdsurffreporting@foundation.sdsu.edu';--(my_fund_code IN, my_email_address OUT)
+                    ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+                         my_finrep_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+                         my_finarra_email_addr := 'sdsurf_dm_admin@sdsu.edu';
+         END IF;
+                
+         IF SUBSTR(my_fund_code,1,1) = '5' THEN
+            --Send email
+            p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, 'FinAdm - '||my_email_subject, my_email_body ||crlf|| my_email_address);
+            p_send_email('sdsurf_dm_admin@sdsu.edu', my_finrep_email_addr, 'FinRep - '||my_email_subject, my_email_body); --F&A doesn't want this notice. IB
+         
+         END IF;
+         
+         IF doctype_code = '120' AND my_sdat_arra_attr = 'ARRA AWARD' THEN
+            --Send email
+            p_send_email('sdsurf_dm_admin@sdsu.edu', my_finarra_email_addr, 'FinARRA - '||my_email_subject, my_email_body ||crlf|| my_email_address);
+            
+         END IF;
+              
+         IF awarded_fund_count > 0 THEN
+                IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host 
+                    THEN Nw_Bfrmods.get_sra_adm_addr(my_fund_code, my_email_address); --(my_fund_code IN, my_email_address OUT)
+                    ELSE my_email_address := 'sdsurf_dm_admin@sdsu.edu';
+                END IF;
+            --Send email
+            p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, 'SRA_Adm - '||my_email_subject, my_email_body|| crlf ||v_attr_sent_list||crlf|| my_email_address);
+
+         END IF;
+
+         IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN 
+            FOR v_apa_address IN get_apa_address
+               LOOP p_send_email('sdsurf_dm_admin@sdsu.edu', v_apa_address.email_address, 'APA - ' ||my_email_subject, my_email_body || crlf || v_attr_sent_list||crlf|| v_apa_address.email_address);
+               END LOOP;
+          ELSE 
+            FOR v_apa_address IN get_apa_address
+               LOOP p_send_email('sdsurf_dm_admin@sdsu.edu', 'sdsurf_dm_admin@sdsu.edu', 'APA - ' ||my_email_subject, my_email_body || crlf || v_attr_sent_list||crlf|| v_apa_address.email_address);
+               END LOOP;
+         
+         END IF; 
+     
+      END IF;
+       
+      IF doctype_code = '115' THEN
+         IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+            Nw_Bfrmods.get_sra_adm_addr(my_fund_code, my_email_address);--(my_fund_code IN, my_email_address OUT)
+            my_email_subject := arra_tag||my_doctype_name|| ' - '|| 'Received for Fund: ' || my_fund_code;
+         --Send email
+            p_send_email('sdsurf_dm_admin@sdsu.edu', my_email_address, my_email_subject, my_email_body|| crlf ||v_attr_sent_list||crlf|| my_email_address);
+         ELSE
+            Nw_Bfrmods.get_sra_adm_addr(my_fund_code, my_email_address);--(my_fund_code IN, my_email_address OUT)
+            my_email_subject := arra_tag||my_doctype_name|| ' - '|| 'Received for Fund: ' || my_fund_code;
+         --Send email
+            p_send_email('sdsurf_dm_admin@sdsu.edu', 'sdsurf_dm_admin@sdsu.edu', my_email_subject, my_email_body|| crlf ||v_attr_sent_list||crlf|| my_email_address);
+         END IF;
+      END IF;
+       
+   END IF;
+   
+ END Email_A0xaward;
+ PROCEDURE get_fna_adm_addr (fund_code IN VARCHAR2, fna_adm_addr OUT VARCHAR2) IS
+ fna_adm_count NUMBER(1) := NULL;
+  BEGIN
+   SELECT COUNT(*) INTO fna_adm_count FROM goremal, FRRGRPI, ftvfund
+     WHERE FRRGRPI_ID_PIDM = goremal_pidm
+      AND frrgrpi_grnt_code = ftvfund_grnt_code
+      AND frrgrpi_id_ind = 'FA'
+      AND ftvfund_fund_code = fund_code
+      AND ftvfund_nchg_date > SYSDATE;
+     IF fna_adm_count = 1 THEN --Return F&A Admin email address
+                SELECT goremal_email_address INTO fna_adm_addr FROM goremal, FRRGRPI, ftvfund
+            WHERE FRRGRPI_ID_PIDM = goremal_pidm
+             AND frrgrpi_grnt_code = ftvfund_grnt_code
+             AND frrgrpi_id_ind = 'FA'
+             AND ftvfund_fund_code = fund_code
+             AND ftvfund_nchg_date > SYSDATE;
+            ELSE
+            fna_adm_addr := 'sdsurf_dm_fa@sdsu.edu';
+    END IF;
+END get_fna_adm_addr;
+ PROCEDURE get_sra_adm_addr (fund_code IN VARCHAR2, sra_adm_addr OUT VARCHAR2) IS
+ sra_adm_count NUMBER(1) := NULL;
+  BEGIN
+   SELECT COUNT(*) INTO sra_adm_count FROM goremal, ftvfund
+   WHERE goremal_pidm = ftvfund_fmgr_code_pidm
+   AND ftvfund_fund_code = fund_code
+   AND ftvfund_nchg_date > SYSDATE;
+     IF sra_adm_count = 1 THEN --Return SRA Admin email address
+                SELECT goremal_email_address INTO sra_adm_addr FROM goremal, ftvfund
+            WHERE goremal_pidm = ftvfund_fmgr_code_pidm
+            AND ftvfund_fund_code = fund_code
+            AND ftvfund_nchg_date > SYSDATE;
+            ELSE sra_adm_addr := 'sdsurf_dm_admin@sdsu.edu';
+    END IF;
+  END get_sra_adm_addr;
+
+ FUNCTION get_proposal_from_fund (fund_code IN VARCHAR2) RETURN VARCHAR2
+   IS
+      proposal_code VARCHAR2(10);
+
+      BEGIN
+        SELECT frbgrnt_prop_code INTO proposal_code FROM frbgrnt, ftvfund 
+        WHERE frbgrnt_code = ftvfund_grnt_code
+        AND ftvfund_coas_code = '1'
+        AND ftvfund_nchg_date > SYSDATE
+        AND ftvfund_fund_code = fund_code
+        AND ROWNUM=1; --Added Rownum to deal with slew of improperly future dated records.  
+                          --Added ROWNUM=1 to prevent from blowing up when multiple titles retured. IB
+
+        RETURN proposal_code;
+        
+        EXCEPTION 
+            WHEN NO_DATA_FOUND THEN 
+                RETURN NULL;
+      END;
+      
+ FUNCTION get_grant_from_fund (fund_code IN VARCHAR2) RETURN VARCHAR2
+   IS
+      grant_code VARCHAR2(10);
+
+      BEGIN
+        SELECT DISTINCT ftvfund_grnt_code INTO grant_code FROM ftvfund 
+        WHERE ftvfund_coas_code = '1'
+        AND ftvfund_nchg_date > SYSDATE
+        AND ftvfund_fund_code = fund_code;
+
+        RETURN grant_code;
+        
+        EXCEPTION 
+            WHEN NO_DATA_FOUND THEN 
+                RETURN NULL;
+      END;
+      
+ FUNCTION sdat_fund_check (fund_code IN VARCHAR2, attr_name IN VARCHAR2) RETURN BOOLEAN
+    IS
+        sdat_check    BOOLEAN;
+        sdat_count    NUMBER(2);
+        frrpusn_count NUMBER(2);
+        frrgusn_count NUMBER(2);
+        
+        BEGIN
+            SELECT COUNT(*) INTO frrgusn_count FROM frrgusn
+            WHERE frrgusn_sdat_code_attr = attr_name
+            AND frrgusn_grnt_code = get_grant_from_fund(fund_code);
+            
+            SELECT COUNT(*) INTO frrpusn_count FROM frrpusn
+            WHERE frrpusn_sdat_code_attr = attr_name
+            AND frrpusn_prop_code = get_proposal_from_fund(fund_code);
+            
+            SELECT frrpusn_count + frrgusn_count INTO sdat_count FROM DUAL;
+            
+            IF sdat_count > 0 THEN sdat_check := TRUE;
+                ELSE sdat_check := FALSE;
+            END IF;
+
+            RETURN sdat_check;
+      
+        END;
+        
+---- Ended per Mary Manesis 10/14/2010
+-- FUNCTION everify_fund_check (fund_code IN VARCHAR2) RETURN VARCHAR2
+--    IS
+--        sdat_check    VARCHAR2(3);
+--        sdat_count    NUMBER(2);
+--        frrpusn_count NUMBER(2);
+--        frrgusn_count NUMBER(2);
+--        
+--        BEGIN
+--            SELECT COUNT(*) INTO frrgusn_count FROM frrgusn
+--            WHERE frrgusn_sdat_code_attr = 'E-VERIFY'
+--            AND frrgusn_grnt_code = get_grant_from_fund(fund_code);
+--            
+--            SELECT COUNT(*) INTO frrpusn_count FROM frrpusn
+--            WHERE frrpusn_sdat_code_attr = 'E-VERIFY'
+--            AND frrpusn_prop_code = get_proposal_from_fund(fund_code);
+--            
+--            SELECT frrpusn_count + frrgusn_count INTO sdat_count FROM DUAL;
+--            
+--            IF sdat_count > 0 THEN sdat_check := 'YES';
+--                ELSE sdat_check := 'NO';
+--            END IF;
+
+--            RETURN sdat_check;
+--      
+--        END;
+        
+        
+  FUNCTION trafficking_fund_check (fund_code IN VARCHAR2) RETURN VARCHAR2
+    IS
+        sdat_check    VARCHAR2(3);
+        sdat_count    NUMBER(2);
+        frrpusn_count NUMBER(2);
+        frrgusn_count NUMBER(2);
+        
+        BEGIN
+            SELECT COUNT(*) INTO frrgusn_count FROM frrgusn
+            WHERE frrgusn_sdat_code_attr = 'TRAFFICKING'
+            AND frrgusn_grnt_code = get_grant_from_fund(fund_code);
+            
+            SELECT COUNT(*) INTO frrpusn_count FROM frrpusn
+            WHERE frrpusn_sdat_code_attr = 'TRAFFICKING'
+            AND frrpusn_prop_code = get_proposal_from_fund(fund_code);
+            
+            SELECT frrpusn_count + frrgusn_count INTO sdat_count FROM DUAL;
+            
+            IF sdat_count > 0 THEN sdat_check := 'YES';
+                ELSE sdat_check := 'NO';
+            END IF;
+
+            RETURN sdat_check;
+      
+        END;
+        
+ FUNCTION sdat_propgrant_check (prop_code IN VARCHAR2, grant_code IN VARCHAR2, attr_name IN VARCHAR2) RETURN BOOLEAN
+    IS
+        sdat_check    BOOLEAN;
+        sdat_count    NUMBER(2);
+        frrpusn_count NUMBER(2);
+        frrgusn_count NUMBER(2);
+        
+        BEGIN
+            SELECT COUNT(*) INTO frrgusn_count FROM frrgusn
+            WHERE frrgusn_sdat_code_attr = attr_name
+            AND frrgusn_grnt_code = grant_code;
+            
+            SELECT COUNT(*) INTO frrpusn_count FROM frrpusn
+            WHERE frrpusn_sdat_code_attr = attr_name
+            AND frrpusn_prop_code = prop_code;
+            
+            SELECT frrpusn_count + frrgusn_count INTO sdat_count FROM DUAL;
+            
+            IF sdat_count > 0 THEN sdat_check := TRUE;
+                ELSE sdat_check := FALSE;
+            END IF;
+
+            RETURN sdat_check;
+      
+        END;
+        
+  FUNCTION sdat_email (attr_name IN VARCHAR2) RETURN VARCHAR2
+    IS
+
+        email_addr VARCHAR2(90);
+        v_db_name  gubinst.gubinst_instance_name%TYPE;
+        v_prod_host VARCHAR2(32) := 'sunset.foundation.sdsu.edu';
+        
+        BEGIN
+        
+         --Get Database name
+            SELECT gubinst_instance_name INTO v_db_name FROM gubinst;
+        
+            IF v_db_name = 'PROD' AND UTL_INADDR.get_host_name = v_prod_host THEN
+            
+               CASE
+                    WHEN attr_name = 'INSURANCE ISSUES'
+                        THEN email_addr := 'sdsurf_dm_insurance@sdsu.edu';
+                    WHEN attr_name = 'MBE/WBE'
+                        THEN email_addr := 'sdsurf_dm_mbewme@sdsu.edu';
+                    WHEN attr_name = 'AT RISK ACTIVITIES'
+                        THEN email_addr := 'sdsurf_dm_atrisk@sdsu.edu';
+                    WHEN attr_name = 'PATENTS/INTELLECTUAL PROPERTY'
+                        THEN email_addr := 'sdsurf_dm_patents@sdsu.edu';
+                    WHEN attr_name = 'HIRING RESTRICTIONS'
+                        THEN email_addr := 'sdsurf_dm_hiring@sdsu.edu';
+                    WHEN attr_name = 'SPONSOR FURNISHED PROPERTY' 
+                        THEN email_addr := 'sdsurf_dm_equipment@sdsu.edu';
+                    WHEN attr_name = 'TRAFFICKING'
+                        THEN email_addr := 'sdsurf_dm_trafficking@sdsu.edu';
+                    WHEN attr_name = 'ARRA AWARD'
+                        THEN email_addr := 'sdsurf_dm_hiring@sdsu.edu';
+                    WHEN attr_name = 'POSTDOC FELLOW/TRAIN'
+                        THEN email_addr := 'sdsurf_dm_fellows@sdsu.edu';
+                    WHEN attr_name = 'STIPENDS'
+                        THEN email_addr := 'sdsurf_dm_stipends@sdsu.edu';
+                    WHEN attr_name = 'FOREIGN PROJECTS'
+                        THEN email_addr := 'sdsurf_dm_insurance@sdsu.edu';
+                    WHEN attr_name = 'ARRA EQUIPMENT GRANTS'
+                        THEN email_addr := 'sdsurf_dm_hiring@sdsu.edu';
+                    WHEN attr_name = 'COST SHARING'
+                        THEN email_addr := 'sdsurf_dm_costsharing@sdsu.edu';  
+               END CASE;
+               
+               ELSE email_addr := 'sdsurf_dm_admin@sdsu.edu';
+               
+            END IF;
+
+            RETURN email_addr;
+      
+        END;
+ 
+ 
+ 
+  FUNCTION get_fund_title (fund_code IN VARCHAR2) RETURN VARCHAR2
+   IS
+   fund_title VARCHAR2(256);
+   title_count NUMBER(1);
+
+   BEGIN
+        SELECT COUNT(*) INTO title_count FROM ftvfund
+            WHERE ftvfund_fund_code = fund_code
+            AND ftvfund_coas_code = '1'
+            AND ftvfund_nchg_date > SYSDATE;
+
+            IF title_count > 0 THEN
+                SELECT ftvfund_title INTO fund_title FROM ftvfund
+                WHERE ftvfund_fund_code = fund_code
+                AND ftvfund_coas_code = '1'
+                AND ftvfund_nchg_date > SYSDATE;
+                
+                ELSE
+                fund_title := 'Fund ' || fund_code;
+            
+            END IF;
+
+            RETURN fund_title;
+    
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+            
+            RETURN NULL;
+   END;
+      
+
+ FUNCTION get_agency_from_fund (fund_code IN VARCHAR2) RETURN VARCHAR2
+   IS
+   agency_name VARCHAR2(60);
+
+   BEGIN
+    SELECT spriden_last_name INTO agency_name
+    FROM spriden, frbgrnt, ftvfund
+    WHERE ftvfund_grnt_code = frbgrnt_code
+    AND ftvfund_nchg_date > SYSDATE
+    AND frbgrnt_agency_pidm = spriden_pidm
+    AND spriden_change_ind IS NULL
+    AND ftvfund_fund_code = fund_code
+    AND ROWNUM=1; --Added Rownum to deal with slew of improperly future dated records.  
+                          --Added ROWNUM=1 to prevent from blowing up when multiple titles retured. IB
+
+    RETURN agency_name;
+    EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+    RETURN NULL;
+   END;
+   
+
+ FUNCTION get_agency_from_proposal (proposal_code IN VARCHAR2) RETURN VARCHAR2
+   IS
+   agency_name VARCHAR2(60);
+
+   BEGIN
+    SELECT spriden_last_name INTO agency_name
+            FROM spriden, frbprop
+            WHERE spriden_pidm = frbprop_agency_pidm
+            AND spriden_change_ind IS NULL
+            AND frbprop_code = proposal_code;
+
+    RETURN agency_name;
+    EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+    RETURN NULL;
+   END;
+END;
+/
